@@ -77,11 +77,15 @@ import java.net.URLEncoder
  *
  * ## Dimensions
  *
- * Grid items report the thumbnail's published dimensions (the site's
- * uniform card ratio); grid markup discloses nothing truer, and the app's
- * fixed-height grid never reads them for layout. The detail record
- * corrects with the file's TRUE resolution — the only place the site
- * publishes it.
+ * Grid items carry NONE, on purpose. The site's listing markup hard-codes
+ * `width='602' height='339'` — its uniform card crop — on every single
+ * cell, whatever the file's true size, so those attributes describe the
+ * THUMBNAIL, never the wallpaper (a 3840x2159 original and a 1080x1920
+ * portrait one both arrive labeled 602x339). Publishing them made the
+ * app's info sheet claim "602x339" for every HDQWalls wallpaper — the bug
+ * this version fixes. [details] is where the TRUE resolution arrives:
+ * each wallpaper page's `Original Resolution` line, the only place the
+ * site publishes it.
  */
 class HdqWallsWallpaperProvider : WallpaperProvider {
     private var httpClient: ProviderHttpClient? = null
@@ -90,7 +94,7 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "HDQWalls",
-            versionName = "1.0.0",
+            versionName = "1.0.1",
             author = "Cloudimage",
             description = "HD, 4K, 5K and 8K wallpapers from hdqwalls.com - scraped, keyless.",
             // The site curates its uploads and carries no per-item rating
@@ -284,8 +288,12 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
      * Android decodes (unlike WallpaperCave's AVIF trap), so the grid
      * carries it in [Wallpaper.thumbUrl] and the disclosed original — the
      * same filename back under `/wallpapers/` — in [Wallpaper.fullUrl].
-     * Tags derive from the title's words so the detail screen's "More
-     * like this" row has a query to work with: the site's search matches
+     * Dimensions are deliberately absent: the listing's `width`/`height`
+     * attributes are the site's uniform 602x339 card crop, identical on
+     * every cell and true of no wallpaper — a value that wrong is worse
+     * than no value, and the app renders null dimensions as "—". Tags
+     * derive from the title's words so the detail screen's "More like
+     * this" row has a query to work with: the site's search matches
      * them, returning the same wallpaper family.
      */
     private fun gridWallpaper(item: HdqWallsParser.GridItem): Wallpaper =
@@ -295,8 +303,6 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
             thumbUrl = item.thumbUrl,
             fullUrl = item.originalUrl,
             title = item.title.ifBlank { null },
-            width = item.width,
-            height = item.height,
             tags = tagsFromTitle(item.title),
         )
 

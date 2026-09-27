@@ -183,8 +183,12 @@ class HdqWallsWallpaperProviderTest {
             // The disclosed original: same file, one directory up.
             assertEquals("https://images.hdqwalls.com/wallpapers/garena-free-fire-z4.jpg", first.fullUrl)
             assertEquals("Garena Free Fire", first.title)
-            assertEquals(602, first.width)
-            assertEquals(339, first.height)
+            // Grid items carry NO dimensions: the listing's width/height
+            // attributes are the site's uniform 602x339 card crop, true of
+            // no wallpaper — the app's info sheet renders null as "—",
+            // not a number that is wrong for every item.
+            assertNull(first.width)
+            assertNull(first.height)
             assertEquals(ContentRating.SFW, first.contentRating)
             // The 4k in the title is a resolution label, not a tag.
             assertEquals(listOf("garena", "free", "fire"), first.tags)
@@ -460,8 +464,9 @@ class HdqWallsWallpaperProviderTest {
 
         assertEquals(1, items.size)
         assertEquals("order-test-wallpaper", items.first().id)
-        assertEquals(602, items.first().width)
-        assertEquals(339, items.first().height)
+        // The deliberately reordered attrs (height before width, mixed
+        // quotes) still parse; the card-crop dims themselves are not
+        // published as dimensions — see GridItem.
         assertEquals("https://images.hdqwalls.com/wallpapers/order-test-xx.jpg", items.first().originalUrl)
         assertEquals("Order Test", items.first().title)
     }

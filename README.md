@@ -28,7 +28,7 @@ direct search results, plain JPEG thumbnails).
 | Package | Version | Size | Capabilities | Notes |
 |---|---|---|---|---|
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.hdqwalls` | 1.0.0 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
+| `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -166,6 +166,12 @@ lines plus 470 lines of tests):
   here: `images.hdqwalls.com/wallpapers/bthumb/{file}.jpg` is a plain
   JPEG every Android decodes, and it discloses its multi-megabyte
   original by directory alone — the same filename under `/wallpapers/`.
+- **No fake dimensions (fixed in 1.0.1).** The listing markup hard-codes
+  `width='602' height='339'` — the site's uniform card crop — on every
+  cell, true of no wallpaper, so 1.0.0 shipped items whose info sheet
+  read "602x339" for everything. Grid items now carry no dimensions at
+  all (the app renders "—"), and the true resolution stays where the
+  site publishes it: the detail record.
 - **True-resolution details.** Each wallpaper page publishes its
   `Original Resolution` (e.g. 3840x2159 — the only place true dims
   exist), an author credit, a download-size label and the site's own tag

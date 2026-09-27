@@ -32,9 +32,14 @@ internal object HdqWallsParser {
         val originalUrl: String,
         /** Display title, ` Wallpaper` suffix already stripped. */
         val title: String,
-        /** Dimensions as published on the thumbnail — the site's uniform card ratio. */
-        val width: Int?,
-        val height: Int?,
+        // No width/height here, on purpose: the listing markup hard-codes
+        // the site's uniform card crop (`width='602' height='339'`) on
+        // EVERY cell — identical for a 4K landscape and a portrait phone
+        // wallpaper, so publishing them would label every item with the
+        // thumbnail's size. The file's TRUE dimensions exist only on the
+        // wallpaper's own page; see [parseDetail], which is where they are
+        // read. Grid items therefore carry no dimensions at all — honest
+        // emptiness over a number that is wrong for every wallpaper.
     )
 
     /** The definitive record of a wallpaper page. */
@@ -112,8 +117,6 @@ internal object HdqWallsParser {
     /** The trailing label every grid title carries. */
     private val WALLPAPER_SUFFIX = Regex("""\s+Wallpaper$""", RegexOption.IGNORE_CASE)
 
-    private val INT = Regex("""^\d+$""")
-
     private const val IMAGE_CDN = "https://images.hdqwalls.com/wallpapers/"
 
     /**
@@ -154,8 +157,6 @@ internal object HdqWallsParser {
             thumbUrl = thumbUrl,
             originalUrl = originalUrl,
             title = cleanTitle(unescapeEntities(rawTitle)),
-            width = attrs["width"]?.toIntOrNull(),
-            height = attrs["height"]?.toIntOrNull(),
         )
     }
 
@@ -323,7 +324,4 @@ internal object HdqWallsParser {
         ATTR.findAll(tag).associate { match ->
             match.groupValues[1] to match.groupValues[2].ifEmpty { match.groupValues[3] }
         }
-
-    /** Digits-only parse; anything else (or absent) is null. */
-    private fun String?.toIntOrNull(): Int? = this?.takeIf { INT.matches(it) }?.toInt()
 }

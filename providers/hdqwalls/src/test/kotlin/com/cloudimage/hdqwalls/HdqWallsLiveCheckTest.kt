@@ -72,6 +72,13 @@ class HdqWallsLiveCheckTest {
             assertTrue(first.id.endsWith("-wallpaper"))
             assertTrue(first.thumbUrl.contains("/bthumb/"))
             assertTrue(first.fullUrl.startsWith("https://images.hdqwalls.com/wallpapers/"))
+            // Regression guard for the 602x339 bug: the live listing still
+            // publishes only its uniform card-crop attrs, so the grid must
+            // carry no dimensions — the true ones are details()'s alone.
+            assertTrue(
+                "grid items must not publish the card-crop dims (${first.width}x${first.height})",
+                first.width == null && first.height == null,
+            )
             assertTrue("expected a next page", page.nextPage != null)
         }
 
