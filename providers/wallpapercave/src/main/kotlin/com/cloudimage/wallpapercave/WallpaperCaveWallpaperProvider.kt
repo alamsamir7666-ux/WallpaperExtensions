@@ -28,15 +28,20 @@ import java.net.URLEncoder
  * wallpapers. Original files are served from two deterministic directories —
  * `/wp/{id}.*` for site wallpapers, `/uwp/{id}.*` for user uploads — and
  * every thumbnail path discloses its original (same filename, family
- * directory), so grid items already carry a working download URL.
+ * directory), so grid items already carry a working download URL. The
+ * thumbnail directories themselves are served as AVIF whatever the client
+ * negotiates — undecodable below Android 12 — so items carry the ORIGINAL
+ * in both fields: the one image URL every device renders.
  *
  * ## How the contract maps onto it
  *
  * - [popular] is the latest feed: page 1 is `/latest-uploads`, page 2 is the
  *   one batch the site's load-more endpoint serves to a plain GET. A
- *   `category` filter switches to curated album topics (`anime`, `people`)
- *   — the same mapping the home sections declare, so filter chips and
- *   section rows agree.
+ *   `category` filter walks a category: its curated topic first (the site's
+ *   own best-of page for it), then the site's category album stream
+ *   (`/categories/anime-manga`, `/categories/people`) merged three albums
+ *   per page — the same machinery search uses, so the anime and people rows
+ *   scroll as deep as search does instead of ending at one topic.
  * - [search] runs the CloudStream two-step: albums from `/search`, then the
  *   first few albums' topic pages fetched one by one and merged, three
  *   albums per page, ten pages deep at most. One user query therefore costs
@@ -53,7 +58,8 @@ import java.net.URLEncoder
  * (open feed, type query, open wallpaper), sequentially, in small bounded
  * batches, with deep-pagination caps — per-user browser-equivalent traffic,
  * the same judgment every CloudStream provider makes. Originals come from
- * `/wp/` and `/uwp/`, which the site leaves open. Should the site ever turn
+ * `/wp/` and `/uwp/`, and the category stream rides `/categories/{slug}` and
+ * topic pages — all paths the site leaves open. Should the site ever turn
  * on Cloudflare challenges, the host's WebView clearance machinery already
  * sits between this plugin and the network.
  *
@@ -81,7 +87,7 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperCave",
-            versionName = "1.0.0",
+            versionName = "1.1.0",
             author = "Cloudimage",
             description = "Wallpapers from wallpapercave.com - scraped, keyless.",
             // The site's upload rules only allow SFW content and it carries no
@@ -103,8 +109,9 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
     /**
      * The default feed. No category selected: the latest uploads (two pages
      * — the site's load-more endpoint only paginates for POST, so a GET-only
-     * plugin sees the first two batches). `anime` / `people` categories map
-     * to the site's curated album topics, which hold every item on one page.
+     * plugin sees the first two batches). `anime` / `people` categories walk
+     * the site's own category pages — the curated topic first, then the
+     * category's album stream, three albums per page.
      */
     override suspend fun popular(
         page: Int,
@@ -112,8 +119,8 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
     ): Result<Page> =
         runCatching {
             when (filters.valuesFor("category").firstOrNull()) {
-                "anime" -> topicPage(ANIME_TOPIC, page)
-                "people" -> topicPage(PEOPLE_TOPIC, page)
+                "anime" -> categoryFeed(ANIME_TOPIC, ANIME_CATEGORY, page)
+                "people" -> categoryFeed(PEOPLE_TOPIC, PEOPLE_CATEGORY, page)
                 else -> latestPage(page)
             }
         }
@@ -254,14 +261,64 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
         return Page(emptyList(), nextPage = null)
     }
 
-    /** A curated album topic: every wallpaper on one page, no pagination. */
-    private suspend fun topicPage(
-        slug: String,
+    /**
+     * A category feed: the curated topic first (the site's best-of page for
+     * the category), then the category's album stream. The site's category
+     * pages (`/categories/anime-manga`, `/categories/people`) list every
+     * topic album of the category on one page; the feed walks that list with
+     * the same merge machinery as search, three albums per page, and drops
+     * ids an earlier page of this session already served. A page whose whole
+     * batch was duplicates consumes the next batch instead of stranding the
+     * feed — the host appends pages one by one and an empty-but-not-final
+     * page would stall the carousel.
+     */
+    private suspend fun categoryFeed(
+        curatedSlug: String,
+        categorySlug: String,
         page: Int,
     ): Page {
-        if (page != 1) return Page(emptyList(), nextPage = null)
-        val wallpapers = wallpapersOfTopic(slug)
-        return Page(wallpapers, nextPage = null)
+        if (page < 1 || page > MAX_CATEGORY_PAGES) return Page(emptyList(), nextPage = null)
+        if (page == 1) {
+            // A feed restart begins a new session: forget what an earlier
+            // session served so the curated topic comes back whole.
+            synchronized(lock) {
+                categorySeenIds.remove(categorySlug)
+                categoryCursor.remove(categorySlug)
+            }
+            val curated = freshInCategory(categorySlug, wallpapersOfTopic(curatedSlug))
+            return Page(curated, nextPage = 2)
+        }
+        val albums = categoryAlbums(categorySlug)
+        var cursor = synchronized(lock) { categoryCursor[categorySlug] ?: 0 }
+        val fresh = mutableListOf<Wallpaper>()
+        while (fresh.isEmpty() && cursor < albums.size) {
+            albums
+                .drop(cursor)
+                .take(ALBUMS_PER_SEARCH_PAGE)
+                .forEach { album ->
+                    runCatching { wallpapersOfTopic(album.slug) }
+                        .getOrNull()
+                        ?.let { items -> fresh += freshInCategory(categorySlug, items) }
+                }
+            cursor += ALBUMS_PER_SEARCH_PAGE
+        }
+        synchronized(lock) { categoryCursor[categorySlug] = cursor }
+        val moreRemain = cursor < albums.size && page < MAX_CATEGORY_PAGES
+        return Page(fresh, nextPage = if (moreRemain) page + 1 else null)
+    }
+
+    /** Drops ids this category's session already served; remembers the rest. */
+    private fun freshInCategory(
+        categorySlug: String,
+        wallpapers: List<Wallpaper>,
+    ): List<Wallpaper> {
+        if (wallpapers.isEmpty()) return wallpapers
+        synchronized(lock) {
+            val seen = categorySeenIds.getOrPut(categorySlug) { LinkedHashSet() }
+            val fresh = wallpapers.filter { it.id !in seen }
+            fresh.forEach { seen.add(it.id) }
+            return fresh
+        }
     }
 
     /** All wallpapers of one album topic — also the workhorse behind search. */
@@ -286,15 +343,24 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
     }
 
     /** Search results with their album list cached briefly for pagination. */
-    private suspend fun albumsFor(query: String): List<WallpaperCaveParser.Album> {
-        val key = query.trim().lowercase()
+    private suspend fun albumsFor(query: String): List<WallpaperCaveParser.Album> =
+        cachedAlbums("q:${query.trim().lowercase()}") { "$BASE_URL/search?q=${encode(query)}" }
+
+    /** The albums a category page lists, cached the same way. */
+    private suspend fun categoryAlbums(categorySlug: String): List<WallpaperCaveParser.Album> =
+        cachedAlbums("cat:$categorySlug") { "$BASE_URL/categories/$categorySlug" }
+
+    /** One album list, fetched on demand and cached for one pagination session. */
+    private suspend fun cachedAlbums(
+        key: String,
+        url: () -> String,
+    ): List<WallpaperCaveParser.Album> {
         synchronized(lock) {
             albumCache.remove(key)?.let { cached ->
                 if (now() - cached.at < SEARCH_CACHE_MS) return cached.albums
             }
         }
-        val albums =
-            fetchAndParse(WallpaperCaveParser::parseAlbums, "$BASE_URL/search?q=${encode(query)}")
+        val albums = fetchAndParse(WallpaperCaveParser::parseAlbums, url())
         synchronized(lock) {
             albumCache[key] = CachedAlbums(albums, now())
             while (albumCache.size > SEARCH_CACHE_SLOTS) {
@@ -306,14 +372,21 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
 
     // ------------------------------------------------------------- mapping
 
-    /** A grid cell to a wallpaper; items whose original path is unrecognizable drop. */
+    /**
+     * A grid cell to a wallpaper; items whose original path is unrecognizable
+     * drop. Both fields carry the ORIGINAL: the grid's own `/uwpr/` thumbs
+     * are served as AVIF whatever the client negotiates, which nothing below
+     * Android 12 decodes — the disclosed original is the one URL every
+     * device renders, the same choice topic items already make.
+     */
     private fun gridWallpaper(item: WallpaperCaveParser.GridItem): Wallpaper? {
         val original = WallpaperCaveParser.toOriginalPath(item.thumbPath) ?: return null
+        val full = WallpaperCaveParser.absolute(original)
         return Wallpaper(
             id = item.id,
             providerId = ID,
-            thumbUrl = WallpaperCaveParser.absolute(item.thumbPath),
-            fullUrl = WallpaperCaveParser.absolute(original),
+            thumbUrl = full,
+            fullUrl = full,
             title = item.title.ifBlank { null },
             width = item.width,
             height = item.height,
@@ -414,13 +487,20 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
         const val ID = "cloudimage.wallpapercave"
         const val BASE_URL = "https://wallpapercave.com"
 
-        /** Curated album topics backing the category filter and home sections. */
+        /** Curated topics backing a category's first page. */
         const val ANIME_TOPIC = "anime-wallpapers"
         const val PEOPLE_TOPIC = "people-wallpapers"
+
+        /** The site's own category pages, the album stream behind pages 2+. */
+        const val ANIME_CATEGORY = "anime-manga"
+        const val PEOPLE_CATEGORY = "people"
 
         /** Search batching: three albums per page, ten pages deep at most. */
         const val ALBUMS_PER_SEARCH_PAGE = 3
         const val MAX_SEARCH_PAGES = 10
+
+        /** Category feeds: curated topic, then the album stream, this deep at most. */
+        const val MAX_CATEGORY_PAGES = 15
 
         /** Album-list cache: one pagination session, four concurrent queries. */
         const val SEARCH_CACHE_MS = 60_000L
@@ -439,4 +519,8 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
     private val albumCache = LinkedHashMap<String, CachedAlbums>()
     private val recentIds = ArrayDeque<String>()
     private val tagPool = LinkedHashSet<String>()
+
+    /** Per-category pagination sessions: served ids and the album cursor. */
+    private val categorySeenIds = LinkedHashMap<String, MutableSet<String>>()
+    private val categoryCursor = mutableMapOf<String, Int>()
 }

@@ -24,7 +24,25 @@ on the two-layer Provider/Extractor pattern used by CloudStream plugins.
 
 | Package | Version | Size | Capabilities | Notes |
 |---|---|---|---|---|
-| `cloudimage.wallpapercave` | 1.0.0 | 21 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpapercave` | 1.1.0 | 23 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+
+### 1.1.0 — tabs that scroll, images that decode
+
+Two fixes over 1.0.0, both found by live-testing what the app actually
+receives:
+
+- **Anime / People tabs ended after ~40 wallpapers.** They served a single
+  curated topic and stopped. A category now walks the site's own category
+  pages (`/categories/anime-manga`, 189 albums; `/categories/people`,
+  128 albums): the curated topic first, then its album stream merged three
+  albums per page — the same machinery search uses, so the rows scroll as
+  deep as search does.
+- **Latest Uploads showed only skeletons.** The feed's `/uwpr/` thumbnails
+  are served as **AVIF regardless of the Accept header** — Android below 12
+  cannot decode them, so every card shimmered forever. Grid items now carry
+  the original file (`/wp/` / `/uwp/`, a plain JPEG/PNG) in both fields —
+  the same choice topic items already make, and the one URL every device
+  renders.
 
 ## How this repository works
 
@@ -58,11 +76,12 @@ A faithful port of the CloudStream scraping architecture to the wallpaper
 domain, in ~720 source lines (plus 490 lines of tests):
 
 - **Two layers.** The provider is the catalog layer — popular feed, curated
-  topics, search, details. The "extractor" layer is trivial by design: a
-  wallpaper page `/w/{id}` resolves to its full-resolution original in the
-  deterministic `/wp/{id}.*` (site) or `/uwp/{id}.*` (user upload) directories.
-  Every grid thumbnail already discloses its original's path, so items carry a
-  working download URL before details are ever fetched.
+  topics + category streams, search, details. The "extractor" layer is
+  trivial by design: a wallpaper page `/w/{id}` resolves to its
+  full-resolution original in the deterministic `/wp/{id}.*` (site) or
+  `/uwp/{id}.*` (user upload) directories. Every grid thumbnail already
+  discloses its original's path, so items carry a working download URL
+  before details are ever fetched.
 - **Regex mining, not a DOM library.** The payload ships only its own classes,
   so HTML is mined with hand-rolled patterns (attribute-order agnostic, both
   id families: numeric `wp14981887`-style and short alphanumeric `qq5qUZy`
@@ -72,16 +91,19 @@ domain, in ~720 source lines (plus 490 lines of tests):
   topic albums, never single wallpapers, so search runs the CloudStream
   two-step (albums → first few topic pages merged, 3 albums per page, capped
   at 10 pages). Popular is `/latest-uploads` + the one follow-up batch the
-  site's `/morelatest` endpoint serves. Categories route to curated topics
-  (anime, people).
+  site's `/morelatest` endpoint serves to a GET. Categories walk the site's
+  own `/categories/{slug}` album lists (curated topic first, then the stream,
+  15 pages deep) — and avoid every robots-disallowed path in the process.
 - **Politeness.** Fetches happen only on explicit user actions, sequentially,
   in small bounded batches with deep-pagination caps and a 60-second album
   cache — browser-equivalent traffic, never crawling. The site's upload rules
   are SFW-only and the provider declares `ContentRating.SFW` accordingly.
-- **Verified.** 23 unit tests built from real captured markup (both id
-  families, both attribute orders, degradation paths), ktlint-clean, and
-  live-verified against the site: latest feed, load-more, curated topics,
-  two-step search, and original-resolution details.
+- **Verified.** 30 unit tests built from real captured markup (both id
+  families, both attribute orders, category-stream pagination and its
+  duplicate-skipping, degradation paths), ktlint-clean, and live-verified
+  against the site via the gated `WallpaperCaveLiveCheckTest`
+  (`WALLPAPERCAVE_LIVE=1`): latest feed, category streams through three
+  pages with unique ids, two-step search, and original-resolution details.
 
 ## Publishing (CI)
 

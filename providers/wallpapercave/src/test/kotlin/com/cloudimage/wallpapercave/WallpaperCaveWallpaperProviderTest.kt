@@ -79,6 +79,20 @@ class WallpaperCaveWallpaperProviderTest {
         </div>
         """.trimIndent()
 
+    /**
+     * The site's category pages — the same album anchors a search answers
+     * with, slugs captured from the live /categories/anime-manga listing.
+     */
+    private val animeCategoryAlbums =
+        """
+        <div class="searchresults">
+        <a href="/a-silent-voice-hd-wallpapers" class="albumthumbnail" title="41 wallpapers in A Silent Voice HD Wallpapers"><div class="aall" photos="41"><span class="overlay">41</span></div></a>
+        <a href="/akame-ga-kill-wallpapers" class="albumthumbnail" title="55 wallpapers in Akame ga Kill Wallpapers"><div class="aall" photos="55"></div></a>
+        <a href="/anohana-the-flower-we-saw-that-day-wallpapers" class="albumthumbnail" title="30 wallpapers in Anohana"><div class="aall" photos="30"></div></a>
+        <a href="/alya-sometimes-hides-her-feelings-in-russian-wallpapers" class="albumthumbnail" title="12 wallpapers in Alya"><div class="aall" photos="12"></div></a>
+        </div>
+        """.trimIndent()
+
     /** One topic-album item per `id|file|width|height|alt` spec, real markup shape. */
     private fun topicPage(vararg specs: String): String =
         specs
@@ -126,7 +140,9 @@ class WallpaperCaveWallpaperProviderTest {
             val first = page.wallpapers.first()
             assertEquals("uwp5093523", first.id)
             assertEquals("cloudimage.wallpapercave", first.providerId)
-            assertEquals("https://wallpapercave.com/uwpr/uwp5093523.jpeg", first.thumbUrl)
+            // The /uwpr/ thumb is served as AVIF (undecodable below Android
+            // 12) — both fields carry the disclosed original instead.
+            assertEquals("https://wallpapercave.com/uwp/uwp5093523.jpeg", first.thumbUrl)
             assertEquals("https://wallpapercave.com/uwp/uwp5093523.jpeg", first.fullUrl)
             assertEquals(200, first.width)
             assertEquals(356, first.height)
@@ -206,7 +222,231 @@ class WallpaperCaveWallpaperProviderTest {
             // The picture's img loads the original directly.
             assertEquals("https://wallpapercave.com/wp/wp14981887.webp", wallpaper.fullUrl)
             assertEquals("https://wallpapercave.com/wp/qq5qUZy.jpg", page.wallpapers[1].fullUrl)
+            // The category continues into its album stream.
+            assertEquals(2, page.nextPage)
+        }
+
+    // ------------------------------------------------------ category stream
+
+    @Test
+    fun `a category page two serves the first album batch of the category stream`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://wallpapercave.com/anime-wallpapers" to
+                            ok(topicPage("wpA1|wpA1.webp|1000|1600|Curated Anime")),
+                        "https://wallpapercave.com/categories/anime-manga" to ok(animeCategoryAlbums),
+                        "https://wallpapercave.com/a-silent-voice-hd-wallpapers" to
+                            ok(topicPage("wpS1|wpS1.webp|1920|1080|A Silent Voice")),
+                        "https://wallpapercave.com/akame-ga-kill-wallpapers" to
+                            ok(topicPage("wpK1|wpK1.webp|1920|1080|Akame ga Kill")),
+                        "https://wallpapercave.com/anohana-the-flower-we-saw-that-day-wallpapers" to
+                            ok(topicPage("wpN1|wpN1.webp|1920|1080|Anohana")),
+                    ),
+                )
+
+            provider.popular(page = 1, filters = Filters.of("category" to "anime")).getOrThrow()
+            val page = provider.popular(page = 2, filters = Filters.of("category" to "anime")).getOrThrow()
+
+            // Three albums merged, none overlapping the curated topic.
+            assertEquals(listOf("wpS1", "wpK1", "wpN1"), page.wallpapers.map { it.id })
+            // The fourth album remains — the stream offers a third page.
+            assertEquals(3, page.nextPage)
+            // The category page was fetched exactly once.
+            assertEquals(
+                1,
+                client.requests.count { it.startsWith("https://wallpapercave.com/categories/") },
+            )
+        }
+
+    @Test
+    fun `a category skips a batch the session already served entirely`() =
+        runTest {
+            configureWith(
+                mapOf(
+                    // The curated topic — also the whole content of the first
+                    // three category albums, so page two's first batch is
+                    // nothing but duplicates.
+                    "https://wallpapercave.com/anime-wallpapers" to
+                        ok(
+                            topicPage(
+                                "wpA1|wpA1.webp|1000|1600|Curated Anime",
+                                "wpA2|wpA2.webp|1000|1600|Curated Anime 2",
+                            ),
+                        ),
+                    "https://wallpapercave.com/categories/anime-manga" to ok(animeCategoryAlbums),
+                    "https://wallpapercave.com/a-silent-voice-hd-wallpapers" to
+                        ok(
+                            topicPage(
+                                "wpA1|wpA1.webp|1000|1600|Curated Anime",
+                                "wpA2|wpA2.webp|1000|1600|Curated Anime 2",
+                            ),
+                        ),
+                    "https://wallpapercave.com/akame-ga-kill-wallpapers" to
+                        ok(
+                            topicPage(
+                                "wpA1|wpA1.webp|1000|1600|Curated Anime",
+                                "wpA2|wpA2.webp|1000|1600|Curated Anime 2",
+                            ),
+                        ),
+                    "https://wallpapercave.com/anohana-the-flower-we-saw-that-day-wallpapers" to
+                        ok(
+                            topicPage(
+                                "wpA1|wpA1.webp|1000|1600|Curated Anime",
+                                "wpA2|wpA2.webp|1000|1600|Curated Anime 2",
+                            ),
+                        ),
+                    "https://wallpapercave.com/alya-sometimes-hides-her-feelings-in-russian-wallpapers" to
+                        ok(topicPage("wpF1|wpF1.webp|800|1200|Alya")),
+                ),
+            )
+
+            provider.popular(page = 1, filters = Filters.of("category" to "anime")).getOrThrow()
+            val page = provider.popular(page = 2, filters = Filters.of("category" to "anime")).getOrThrow()
+
+            // The all-duplicate batch was consumed and skipped; the fourth
+            // album answers instead — and the stream is exhausted after it.
+            assertEquals(listOf("wpF1"), page.wallpapers.map { it.id })
             assertNull(page.nextPage)
+        }
+
+    @Test
+    fun `a category exhausts its album list with no next page`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://wallpapercave.com/anime-wallpapers" to
+                            ok(topicPage("wpA1|wpA1.webp|1000|1600|Curated Anime")),
+                        "https://wallpapercave.com/categories/anime-manga" to ok(animeCategoryAlbums),
+                        "https://wallpapercave.com/a-silent-voice-hd-wallpapers" to
+                            ok(topicPage("wpS1|wpS1.webp|1920|1080|A Silent Voice")),
+                        "https://wallpapercave.com/akame-ga-kill-wallpapers" to
+                            ok(topicPage("wpK1|wpK1.webp|1920|1080|Akame ga Kill")),
+                        "https://wallpapercave.com/anohana-the-flower-we-saw-that-day-wallpapers" to
+                            ok(topicPage("wpN1|wpN1.webp|1920|1080|Anohana")),
+                        "https://wallpapercave.com/alya-sometimes-hides-her-feelings-in-russian-wallpapers" to
+                            ok(topicPage("wpF1|wpF1.webp|800|1200|Alya")),
+                    ),
+                )
+
+            val anime = Filters.of("category" to "anime")
+            provider.popular(page = 1, filters = anime).getOrThrow()
+            provider.popular(page = 2, filters = anime).getOrThrow()
+            val last = provider.popular(page = 3, filters = anime).getOrThrow()
+
+            assertEquals(listOf("wpF1"), last.wallpapers.map { it.id })
+            assertNull(last.nextPage)
+            // The category page stays cached across the whole session.
+            assertEquals(
+                1,
+                client.requests.count { it.startsWith("https://wallpapercave.com/categories/") },
+            )
+        }
+
+    @Test
+    fun `a failing category album is skipped and the rest still answer`() =
+        runTest {
+            configureWith(
+                mapOf(
+                    "https://wallpapercave.com/anime-wallpapers" to
+                        ok(topicPage("wpA1|wpA1.webp|1000|1600|Curated Anime")),
+                    "https://wallpapercave.com/categories/anime-manga" to ok(animeCategoryAlbums),
+                    "https://wallpapercave.com/a-silent-voice-hd-wallpapers" to
+                        ok(topicPage("wpS1|wpS1.webp|1920|1080|A Silent Voice")),
+                    // akame-ga-kill is unrouted and answers 500.
+                    "https://wallpapercave.com/anohana-the-flower-we-saw-that-day-wallpapers" to
+                        ok(topicPage("wpN1|wpN1.webp|1920|1080|Anohana")),
+                ),
+            )
+
+            provider.popular(page = 1, filters = Filters.of("category" to "anime")).getOrThrow()
+            val page = provider.popular(page = 2, filters = Filters.of("category" to "anime")).getOrThrow()
+
+            assertEquals(listOf("wpS1", "wpN1"), page.wallpapers.map { it.id })
+        }
+
+    @Test
+    fun `a category restart forgets the earlier session`() =
+        runTest {
+            configureWith(
+                mapOf(
+                    "https://wallpapercave.com/anime-wallpapers" to
+                        ok(
+                            topicPage(
+                                "wpA1|wpA1.webp|1000|1600|Curated Anime",
+                                "wpA2|wpA2.webp|1000|1600|Curated Anime 2",
+                            ),
+                        ),
+                    "https://wallpapercave.com/categories/anime-manga" to ok(animeCategoryAlbums),
+                    "https://wallpapercave.com/a-silent-voice-hd-wallpapers" to
+                        ok(topicPage("wpS1|wpS1.webp|1920|1080|A Silent Voice")),
+                ),
+            )
+
+            val anime = Filters.of("category" to "anime")
+            provider.popular(page = 1, filters = anime).getOrThrow()
+            provider.popular(page = 2, filters = anime).getOrThrow()
+
+            // The feed restarted (source re-selected, tab revisited): page 1
+            // re-serves the curated topic in full, not the session's leavings.
+            val restart = provider.popular(page = 1, filters = anime).getOrThrow()
+
+            assertEquals(listOf("wpA1", "wpA2"), restart.wallpapers.map { it.id })
+            assertEquals(2, restart.nextPage)
+        }
+
+    @Test
+    fun `a people category walks the people stream`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://wallpapercave.com/people-wallpapers" to
+                            ok(topicPage("wpP1|wpP1.webp|1000|1600|People")),
+                        "https://wallpapercave.com/categories/people" to
+                            ok(
+                                """
+                                <a href="/alexander-hamilton-wallpapers" class="albumthumbnail" title="28 wallpapers in Alexander Hamilton Wallpapers"><div class="aall" photos="28"></div></a>
+                                """.trimIndent(),
+                            ),
+                        "https://wallpapercave.com/alexander-hamilton-wallpapers" to
+                            ok(topicPage("wpH1|wpH1.webp|1920|1080|Hamilton")),
+                    ),
+                )
+
+            val people = Filters.of("category" to "people")
+            val first = provider.popular(page = 1, filters = people).getOrThrow()
+            val second = provider.popular(page = 2, filters = people).getOrThrow()
+
+            assertEquals(listOf("wpP1"), first.wallpapers.map { it.id })
+            assertEquals(listOf("wpH1"), second.wallpapers.map { it.id })
+            assertEquals(
+                listOf(
+                    "https://wallpapercave.com/people-wallpapers",
+                    "https://wallpapercave.com/categories/people",
+                    "https://wallpapercave.com/alexander-hamilton-wallpapers",
+                ),
+                client.requests,
+            )
+        }
+
+    @Test
+    fun `a category stops at its page cap without another request`() =
+        runTest {
+            val client = configureWith(emptyMap())
+
+            // MAX_CATEGORY_PAGES is 15: the sixteenth page is refused before
+            // any request fires.
+            val page =
+                provider
+                    .popular(page = 16, filters = Filters.of("category" to "anime"))
+                    .getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+            assertTrue(client.requests.isEmpty())
         }
 
     @Test
