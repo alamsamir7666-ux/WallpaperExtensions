@@ -4,12 +4,15 @@ Extension repository for the [Cloudimage](https://github.com/alamsamir7666-ux/Cl
 Android app — installable wallpaper-source packages, published to this repo's
 `gh-pages` branch.
 
-The repository ships two keyless scrapers, both modeled on the two-layer
+The repository ships three keyless scrapers, all modeled on the two-layer
 Provider/Extractor pattern used by CloudStream plugins: the star,
-**`cloudimage.wallpapercave`**, and its sharp-eyed sibling
+**`cloudimage.wallpapercave`**, its sharp-eyed sibling
 **`cloudimage.hdqwalls`** — HD, 4K, 5K and 8K wallpapers from hdqwalls.com,
 the friendliest scraping target in the set (real pagination everywhere,
-direct search results, plain JPEG thumbnails).
+direct search results, plain JPEG thumbnails) — and
+**`cloudimage.wallpapers4k`** — the resolution-first library at
+4kwallpapers.com, whose schema.org markup hands over title, tags and
+originals with unusual candor.
 
 ## Install in the app
 
@@ -20,8 +23,9 @@ direct search results, plain JPEG thumbnails).
    (`raw.githubusercontent.com/…/WallpaperExtensions/gh-pages/index.json`),
    verifies every package's SHA-256 on download, and installs it as a
    runtime-loaded provider.
-4. **Install** → *WallpaperCave*, *HDQWalls*, or both. No API key, no
-   account — each reads its site the way the site's own browser UI does.
+4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*, or any
+   mix. No API key, no account — each reads its site the way the site's
+   own browser UI does.
 
 ## Packages
 
@@ -29,6 +33,7 @@ direct search results, plain JPEG thumbnails).
 |---|---|---|---|---|
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -99,6 +104,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 ├── extension.json           manifest: id, version, entry class
 └── src/…                    parser + provider + 34 unit tests
 providers/hdqwalls/          the second extension, same layout (21 tests)
+providers/wallpapers4k/      the third extension, same layout (19 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -189,6 +195,62 @@ lines plus 470 lines of tests):
   shelf, definitive details with true dimensions, and the random batch —
   all green against the live site.
 
+## The 4K Wallpapers extension
+
+The third scraper, built for a site that labels itself by resolution and
+speaks schema.org in its markup (~700 source lines plus 690 lines of
+tests):
+
+- **A grid that introduces itself.** Every listing — the homepage's
+  trending feed (the newest uploads, paginated 963 pages deep on `/`
+  itself), the popular ranking, every category, search — serves the same
+  twenty-four `wallpapers__item` cells, each an `ImageObject` carrying an
+  `itemprop="keywords"` meta (title plus the site's own tags), an
+  `itemprop="contentUrl"` link (the 800px preview) and the wallpaper-page
+  anchor. The homepage's page one stacks a ten-item featured carousel on
+  top — overlap-free, so it rides along as a bonus batch.
+- **Originals disclosed by directory.** Previews live under
+  `/images/walls/thumbs*/{id}.{ext}` and every one discloses its
+  multi-megabyte source by filename alone under `/images/walls/orig/`
+  (verified live: 5120x2880 JPEG at 5.8 MB, 4000x4000 PNG at 3.0 MB) —
+  grid items carry a working download URL before details are ever
+  fetched, PNG extensions included.
+- **True-resolution details.** The site publishes every wallpaper in
+  dozens of cropped sizes; the detail page's `Download Original (WxH)`
+  link is the one labeled original, and the only place true dimensions
+  exist. `details()` reads it (with a directory-disclosed fallback), so
+  the app's v1.0.21 info sheet shows real specs like `5120x2880`.
+- **No fake dimensions — ever.** The listing hard-codes its uniform
+  400x225 card crop on every cell, the same trap hdqwalls 1.0.0 fell
+  into; this provider shipped day one with null grid dimensions and the
+  same regression guard in its live tests.
+- **Fourteen shelves.** Popular and Latest ride the host's `sorting`
+  vocabulary (Latest walks the homepage's freshest grid); Anime and
+  People ride the host's `category` values — both native categories on
+  this site; Nature, Space, Abstract, Cars, Games, Movies, Animals,
+  Fantasy, Music and Dark are tag-style `query` presets riding the
+  site's own search, which names them precisely (verified live:
+  `nature` returns the Nature listing's own page one, 21 of 24).
+- **Honest search.** The site's search serves a single page of
+  twenty-four with no pagination — `nextPage` is null, and deeper pages
+  answer empty instead of repeating the batch.
+- **Politeness.** robots.txt excludes only crawl-budget paths
+  (`/search/`, `/recent/`, the thumb directories); the provider walks
+  allowed pages exclusively — `/recent/` is deliberately unused because
+  the homepage grid serves the identical freshest batch — touches
+  `/search/` only on an explicit user search, and lets the app's image
+  pipeline fetch exactly the URLs the site's own markup points every
+  browser at. One request per page of twenty-four, capped at 100 pages.
+- **Verified.** 19 unit tests from real captured markup (both cell
+  shapes — full listing cells and lean related-cells, PNG extension
+  round-trips, the ctrl-right pagination contract, single-page search
+  honesty, detail fallbacks, host-vocabulary routing, the no-dims
+  regression guard) plus a gated `Wallpapers4KLiveCheckTest`
+  (`WALLPAPERS4K_LIVE=1`): popular through two fresh pages, the
+  multi-megabyte original itself, homepage and category pagination,
+  single-page search, query-preset shelves, and definitive details
+  including a portrait-shape guard — all green against the live site.
+
 ## Publishing (CI)
 
 On every push to `main` that touches `providers/**`, `tools/**`, or the
@@ -227,6 +289,8 @@ done
 # → providers/wallpapercave/build/outputs/extension/cloudimage.wallpapercave.zip
 ./gradlew :providers:hdqwalls:check :providers:hdqwalls:packageExtension
 # → providers/hdqwalls/build/outputs/extension/cloudimage.hdqwalls.zip
+./gradlew :providers:wallpapers4k:check :providers:wallpapers4k:packageExtension
+# → providers/wallpapers4k/build/outputs/extension/cloudimage.wallpapers4k.zip
 ```
 
 ## Adding another extension
