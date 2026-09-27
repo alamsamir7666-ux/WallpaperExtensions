@@ -4,9 +4,12 @@ Extension repository for the [Cloudimage](https://github.com/alamsamir7666-ux/Cl
 Android app — installable wallpaper-source packages, published to this repo's
 `gh-pages` branch.
 
-The star of this repository is **`cloudimage.wallpapercave`**: a keyless
-WallpaperCave scraper — the first scraping source in the ecosystem, modeled
-on the two-layer Provider/Extractor pattern used by CloudStream plugins.
+The repository ships two keyless scrapers, both modeled on the two-layer
+Provider/Extractor pattern used by CloudStream plugins: the star,
+**`cloudimage.wallpapercave`**, and its sharp-eyed sibling
+**`cloudimage.hdqwalls`** — HD, 4K, 5K and 8K wallpapers from hdqwalls.com,
+the friendliest scraping target in the set (real pagination everywhere,
+direct search results, plain JPEG thumbnails).
 
 ## Install in the app
 
@@ -17,14 +20,15 @@ on the two-layer Provider/Extractor pattern used by CloudStream plugins.
    (`raw.githubusercontent.com/…/WallpaperExtensions/gh-pages/index.json`),
    verifies every package's SHA-256 on download, and installs it as a
    runtime-loaded provider.
-4. **Install** → *WallpaperCave*. No API key, no account — it reads
-   wallpapercave.com the way the site's own browser UI does.
+4. **Install** → *WallpaperCave*, *HDQWalls*, or both. No API key, no
+   account — each reads its site the way the site's own browser UI does.
 
 ## Packages
 
 | Package | Version | Size | Capabilities | Notes |
 |---|---|---|---|---|
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.hdqwalls` | 1.0.0 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -94,6 +98,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 ├── build.gradle.kts         applies the cloudimage.provider convention
 ├── extension.json           manifest: id, version, entry class
 └── src/…                    parser + provider + 34 unit tests
+providers/hdqwalls/          the second extension, same layout (21 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -137,6 +142,47 @@ domain, in ~800 source lines (plus 560 lines of tests):
   pages with unique ids, the girls and cars feeds end to end, two-step
   search, and original-resolution details.
 
+## The HDQWalls extension
+
+The second scraper, purpose-built for a site that is *listing-first* — every
+feed is the same shape, so the provider is one clean mapping (~640 source
+lines plus 470 lines of tests):
+
+- **One grid, every feed.** Popular (`/popular-wallpapers`), latest
+  (`/latest-wallpapers`), every category (`/category/{slug}-wallpapers`)
+  and search (`/search?q=`) serve the same 18-per-page grid with REAL
+  pagination — no album indirection, no load-more seams, one request per
+  page. The pagination bar's own `Next »` link is the "more exists"
+  signal (absent on the last page — and past-the-end requests clamp to
+  the last page on this site, so that link is the stopper, not a guess).
+- **Fourteen shelves.** Popular and Latest ride the host's `sorting`
+  vocabulary; Anime rides its `category` value (and Celebrities maps the
+  host's `people` — the honest nearest expression); Girls, Cars,
+  Superheroes, Games, Movies, Nature, Abstract, Animals, Bikes and Sports
+  are tag-style `query` presets that ride the site's own search, which
+  those terms address precisely (verified live: `cars` — 12,303 results,
+  684 pages).
+- **Real JPEG thumbnails.** The WallpaperCave AVIF trap does not exist
+  here: `images.hdqwalls.com/wallpapers/bthumb/{file}.jpg` is a plain
+  JPEG every Android decodes, and it discloses its multi-megabyte
+  original by directory alone — the same filename under `/wallpapers/`.
+- **True-resolution details.** Each wallpaper page publishes its
+  `Original Resolution` (e.g. 3840x2159 — the only place true dims
+  exist), an author credit, a download-size label and the site's own tag
+  row; the parser reads all of them with two URL fallbacks
+  (`data-original-url`, `og:image`) behind the blockquote.
+- **Politeness.** robots.txt excludes only the autocomplete `/ajax?s=`
+  endpoint (never called; suggestions come from seen tags) and
+  `/addauthor`. Everything used is allowed, one request per page, capped
+  at 100 pages deep.
+- **Verified.** 21 unit tests from real captured markup (grid shapes,
+  both quote styles, attribute orders, pagination stop signals, blank
+  queries, deep-page caps, detail fallbacks) plus a gated
+  `HdqWallsLiveCheckTest` (`HDQWALLS_LIVE=1`): popular through two fresh
+  pages, the anime shelf, direct search pagination, a query-preset
+  shelf, definitive details with true dimensions, and the random batch —
+  all green against the live site.
+
 ## Publishing (CI)
 
 On every push to `main` that touches `providers/**`, `tools/**`, or the
@@ -173,6 +219,8 @@ done
 
 ./gradlew :providers:wallpapercave:check :providers:wallpapercave:packageExtension
 # → providers/wallpapercave/build/outputs/extension/cloudimage.wallpapercave.zip
+./gradlew :providers:hdqwalls:check :providers:hdqwalls:packageExtension
+# → providers/hdqwalls/build/outputs/extension/cloudimage.hdqwalls.zip
 ```
 
 ## Adding another extension
