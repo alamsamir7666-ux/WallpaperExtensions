@@ -1,0 +1,76 @@
+name: publish extension repository
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "providers/**"
+      - "tools/**"
+      - ".github/workflows/publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Test, package and publish to gh-pages
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout extension sources
+        uses: actions/checkout@v7
+        with:
+          path: extensions
+
+      - name: Checkout app repository (build scaffolding)
+        uses: actions/checkout@v7
+        with:
+          repository: alamsamir7666-ux/Cloud-Wallpaper
+          path: app
+
+      - name: Overlay extension sources onto the app tree
+        run: |
+          for provider in extensions/providers/*/; do
+            name="$(basename "$provider")"
+            rm -rf "app/providers/$name"
+            cp -r "$provider" "app/providers/$name"
+            grep -q "\":providers:$name\"" app/settings.gradle.kts \
+              || echo "include(\":providers:$name\")" >> app/settings.gradle.kts
+          done
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Test and package every extension
+        run: |
+          cd app
+          tasks=""
+          for name in $(ls -d ../extensions/providers/*/ | xargs -n1 basename); do
+            tasks="$tasks :providers:$name:check :providers:$name:packageExtension"
+          done
+          ./gradlew $tasks --no-daemon
+
+      - name: Assemble repository
+        run: |
+          mkdir -p repo
+          for name in $(ls -d extensions/providers/*/ | xargs -n1 basename); do
+            cp "app/providers/$name/build/outputs/extension/"*.zip repo/
+          done
+          python3 extensions/tools/build_repo_index.py repo \
+            --name "WallpaperExtensions"
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: repo
+          force_orphan: true
+          commit_message: "publish extension repository"
