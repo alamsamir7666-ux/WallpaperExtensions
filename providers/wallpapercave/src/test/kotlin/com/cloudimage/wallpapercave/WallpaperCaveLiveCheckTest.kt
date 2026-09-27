@@ -117,6 +117,28 @@ class WallpaperCaveLiveCheckTest {
         }
 
     @Test
+    fun `query preset tabs stream live - girls and cars`() =
+        runTest {
+            assumeTrue(live())
+
+            val girls = listOf(1, 2, 3).map { page -> configured().search("girls", page = page).getOrThrow() }
+            assertTrue("girls curated page served ${girls[0].wallpapers.size}", girls[0].wallpapers.size >= 20)
+            assertTrue("girls stream page 2 served ${girls[1].wallpapers.size}", girls[1].wallpapers.size >= 10)
+            assertTrue("girls page 2 must offer page 3", girls[1].nextPage != null)
+            assertTrue("girls stream page 3 served ${girls[2].wallpapers.size}", girls[2].wallpapers.size >= 10)
+            val girlsIds = girls.flatMap { it.wallpapers }.map { it.id }
+            assertTrue("girls ids repeat across pages", girlsIds.size == girlsIds.distinct().size)
+            assertOriginalUrls("girls feed", girls.flatMap { p -> p.wallpapers.flatMap { listOf(it.thumbUrl, it.fullUrl) } })
+
+            val cars = listOf(1, 2).map { page -> configured().search("cars", page = page).getOrThrow() }
+            assertTrue("cars curated page served ${cars[0].wallpapers.size}", cars[0].wallpapers.size >= 20)
+            assertTrue("cars stream page 2 served ${cars[1].wallpapers.size}", cars[1].wallpapers.size >= 10)
+            val carIds = cars.flatMap { it.wallpapers }.map { it.id }
+            assertTrue("car ids repeat across pages", carIds.size == carIds.distinct().size)
+            assertOriginalUrls("cars feed", cars.flatMap { p -> p.wallpapers.flatMap { listOf(it.thumbUrl, it.fullUrl) } })
+        }
+
+    @Test
     fun `search still merges albums`() =
         runTest {
             assumeTrue(live())

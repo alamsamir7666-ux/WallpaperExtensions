@@ -24,7 +24,35 @@ on the two-layer Provider/Extractor pattern used by CloudStream plugins.
 
 | Package | Version | Size | Capabilities | Notes |
 |---|---|---|---|---|
-| `cloudimage.wallpapercave` | 1.1.0 | 23 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+
+### 1.2.0 — a full shelf of browse tabs
+
+The home tab bar grew from three tabs to **thirteen**. Latest Uploads and
+Anime/People keep their routing; ten new shelves arrive as tag-style `query`
+presets (the host's v1.0.15 mechanism for feeds outside its category
+vocabulary), each walking its own category feed — the site's curated topic
+first, then that category's album stream, three albums per page:
+
+| Tab | Page 1 (curated) | Pages 2+ (album stream) |
+|---|---|---|
+| Anime | `anime-wallpapers` (41) | `/categories/anime-manga` (189 albums) |
+| Girls | `girls-wallpapers` (122) | `/search?q=girls` (48 albums) |
+| Cars | `cars-wallpapers` (79) | `/categories/vehicles/cars` (49 albums) |
+| People | `people-wallpapers` (50) | `/categories/people` (128 albums) |
+| Games | `games-wallpapers` (52) | `/categories/games` (134 albums) |
+| Movies | `movies-wallpapers` (91) | `/categories/movies` (102 albums) |
+| Nature | `nature-wallpapers` (78) | `/categories/nature` (46 albums) |
+| Space | `space-wallpapers` (85) | `/categories/universe` (42 albums) |
+| Animals | `animals-wallpapers` (75) | `/categories/nature/animals` (51 albums) |
+| Bikes | `motorcycles-wallpapers` (83) | `/categories/vehicles/motorcycles` (71 albums) |
+| Sports | `sports-wallpapers` (76) | `/categories/sports` (73 albums) |
+| Abstract | `abstract-wallpapers` (98) | `/categories/abstract` (29 albums) |
+
+A search that names a tab exactly (`"cars"`, `"Girls"`) walks the same feed —
+the site itself answers such terms with its category pages (`/search?q=cars`
+redirects to the cars category), so this is its own behavior with a better
+first page. Longer queries still ride the album merge.
 
 ### 1.1.0 — tabs that scroll, images that decode
 
@@ -65,7 +93,7 @@ is reproducible: CI rebuilds every package from source on each push.
 providers/wallpapercave/     extension source (Kotlin JVM module)
 ├── build.gradle.kts         applies the cloudimage.provider convention
 ├── extension.json           manifest: id, version, entry class
-└── src/…                    parser + provider + 23 unit tests
+└── src/…                    parser + provider + 34 unit tests
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -73,7 +101,7 @@ tools/build_repo_index.py    writes index.json from a directory of zips
 ## The WallpaperCave extension
 
 A faithful port of the CloudStream scraping architecture to the wallpaper
-domain, in ~720 source lines (plus 490 lines of tests):
+domain, in ~800 source lines (plus 560 lines of tests):
 
 - **Two layers.** The provider is the catalog layer — popular feed, curated
   topics + category streams, search, details. The "extractor" layer is
@@ -91,19 +119,23 @@ domain, in ~720 source lines (plus 490 lines of tests):
   topic albums, never single wallpapers, so search runs the CloudStream
   two-step (albums → first few topic pages merged, 3 albums per page, capped
   at 10 pages). Popular is `/latest-uploads` + the one follow-up batch the
-  site's `/morelatest` endpoint serves to a GET. Categories walk the site's
+  site's `/morelatest` endpoint serves to a GET. Browse tabs walk the site's
   own `/categories/{slug}` album lists (curated topic first, then the stream,
-  15 pages deep) — and avoid every robots-disallowed path in the process.
+  15 pages deep) — Girls, which the site files under no category of its own,
+  rides its search listing as the stream — and avoid every
+  robots-disallowed path in the process.
 - **Politeness.** Fetches happen only on explicit user actions, sequentially,
   in small bounded batches with deep-pagination caps and a 60-second album
   cache — browser-equivalent traffic, never crawling. The site's upload rules
   are SFW-only and the provider declares `ContentRating.SFW` accordingly.
-- **Verified.** 30 unit tests built from real captured markup (both id
+- **Verified.** 34 unit tests built from real captured markup (both id
   families, both attribute orders, category-stream pagination and its
-  duplicate-skipping, degradation paths), ktlint-clean, and live-verified
-  against the site via the gated `WallpaperCaveLiveCheckTest`
+  duplicate-skipping, query-preset routing and exact-term matching,
+  interleaved-tab session isolation, degradation paths), ktlint-clean, and
+  live-verified against the site via the gated `WallpaperCaveLiveCheckTest`
   (`WALLPAPERCAVE_LIVE=1`): latest feed, category streams through three
-  pages with unique ids, two-step search, and original-resolution details.
+  pages with unique ids, the girls and cars feeds end to end, two-step
+  search, and original-resolution details.
 
 ## Publishing (CI)
 

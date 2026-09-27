@@ -37,16 +37,24 @@ import java.net.URLEncoder
  *
  * - [popular] is the latest feed: page 1 is `/latest-uploads`, page 2 is the
  *   one batch the site's load-more endpoint serves to a plain GET. A
- *   `category` filter walks a category: its curated topic first (the site's
- *   own best-of page for it), then the site's category album stream
+ *   `category` filter walks that category's feed: the curated topic first
+ *   (the site's own best-of page for it), then the category's album stream
  *   (`/categories/anime-manga`, `/categories/people`) merged three albums
- *   per page — the same machinery search uses, so the anime and people rows
- *   scroll as deep as search does instead of ending at one topic.
- * - [search] runs the CloudStream two-step: albums from `/search`, then the
- *   first few albums' topic pages fetched one by one and merged, three
- *   albums per page, ten pages deep at most. One user query therefore costs
- *   at most 1 + 3 requests per page — a browser tab on the site's own
- *   search results costs more.
+ *   per page — the same machinery search uses, so a category row scrolls as
+ *   deep as search does instead of ending at one topic.
+ * - [sections] offers the site's shelves as tabs: the latest feed plus
+ *   twelve categories (anime, girls, cars, people, games, movies, nature,
+ *   space, animals, bikes, sports, abstract). Anime and people ride the
+ *   host's own `category` vocabulary; the rest are tag-style `query`
+ *   presets the host routes through [search], where an exact term walks its
+ *   category feed the same way — the site itself answers such terms with
+ *   its category pages (`/search?q=cars` redirects to the cars one), so
+ *   this is its own behavior with a better first page.
+ * - [search] runs the CloudStream two-step for every other query: albums
+ *   from `/search`, then the first few albums' topic pages fetched one by
+ *   one and merged, three albums per page, ten pages deep at most. One user
+ *   query therefore costs at most 1 + 3 requests per page — a browser tab
+ *   on the site's own search results costs more.
  * - [details] fetches `/w/{id}` and reads `img.wpimg`: the definitive URL
  *   (a grid's extension-derived guess is corrected here), the title, and
  *   aspect-true dimensions.
@@ -87,7 +95,7 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperCave",
-            versionName = "1.1.0",
+            versionName = "1.2.0",
             author = "Cloudimage",
             description = "Wallpapers from wallpapercave.com - scraped, keyless.",
             // The site's upload rules only allow SFW content and it carries no
@@ -109,20 +117,18 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
     /**
      * The default feed. No category selected: the latest uploads (two pages
      * — the site's load-more endpoint only paginates for POST, so a GET-only
-     * plugin sees the first two batches). `anime` / `people` categories walk
-     * the site's own category pages — the curated topic first, then the
-     * category's album stream, three albums per page.
+     * plugin sees the first two batches). A recognized `category` value —
+     * the host vocabulary offers `anime` and `people` — walks that
+     * category's feed: the curated topic first, then the category's album
+     * stream, three albums per page.
      */
     override suspend fun popular(
         page: Int,
         filters: Filters,
     ): Result<Page> =
         runCatching {
-            when (filters.valuesFor("category").firstOrNull()) {
-                "anime" -> categoryFeed(ANIME_TOPIC, ANIME_CATEGORY, page)
-                "people" -> categoryFeed(PEOPLE_TOPIC, PEOPLE_CATEGORY, page)
-                else -> latestPage(page)
-            }
+            val category = filters.valuesFor("category").firstOrNull()?.let(categoryByTerm::get)
+            if (category != null) categoryFeed(category, page) else latestPage(page)
         }
 
     /**
@@ -131,6 +137,13 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
      * fetch their topic pages one by one, merge the wallpapers. A failing
      * album is skipped (its wallpapers, not the whole page); the deep-
      * pagination cap keeps a long scroll from walking the entire result set.
+     *
+     * A query naming a browse tab exactly walks that tab's category feed
+     * instead — the tag-style sections arrive here as their `query` presets,
+     * and the site itself answers such terms with its category pages
+     * (`/search?q=cars` redirects to the cars one), so this rides the site's
+     * own behavior with a curated first page. Exact match only; anything
+     * longer is a query like any other.
      */
     override suspend fun search(
         query: String,
@@ -140,6 +153,9 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
         runCatching {
             if (query.isBlank()) {
                 return@runCatching latestPage(1)
+            }
+            categoryByTerm[query.trim().lowercase()]?.let { category ->
+                return@runCatching categoryFeed(category, page)
             }
             if (page < 1 || page > MAX_SEARCH_PAGES) {
                 return@runCatching Page(emptyList(), nextPage = null)
@@ -177,16 +193,26 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
         }
 
     /**
-     * One batch of curated albums as a section each — the home the site
-     * itself would show, expressed entirely in the host's filter vocabulary.
-     * Cheap and offline, as the contract asks.
+     * The site's shelves as tabs, one feed per browse category: the latest
+     * uploads first, then the categories in bar order. Anime and People ride
+     * the host's own `category` vocabulary; every other shelf is a tag-style
+     * `query` preset the host routes through [search] with that term, where
+     * it walks the category feed like any other. Cheap and offline, as the
+     * contract asks.
      */
     override suspend fun sections(): List<HomeSection> =
-        listOf(
-            HomeSection(id = "latest", title = "Latest Uploads"),
-            HomeSection(id = "anime", title = "Anime", filters = Filters.of("category" to "anime")),
-            HomeSection(id = "people", title = "People", filters = Filters.of("category" to "people")),
-        )
+        listOf(HomeSection(id = "latest", title = "Latest Uploads")) +
+            browseTabs.map { category ->
+                HomeSection(id = category.term, title = category.title, filters = category.sectionFilters())
+            }
+
+    /** A tab's preset: the host's own value where it has one, a query preset otherwise. */
+    private fun CategorySpec.sectionFilters(): Filters =
+        if (asHostCategory) {
+            Filters.of("category" to term)
+        } else {
+            Filters.of("query" to term)
+        }
 
     /**
      * The definitive record for an id. The `/w/{id}` page's `img.wpimg`
@@ -262,19 +288,20 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
     }
 
     /**
-     * A category feed: the curated topic first (the site's best-of page for
-     * the category), then the category's album stream. The site's category
-     * pages (`/categories/anime-manga`, `/categories/people`) list every
-     * topic album of the category on one page; the feed walks that list with
-     * the same merge machinery as search, three albums per page, and drops
-     * ids an earlier page of this session already served. A page whose whole
+     * One category tab's feed: the curated topic first (the site's best-of
+     * page for the category), then the category's album stream. A stream is
+     * the site's category page (`/categories/anime-manga`,
+     * `/categories/vehicles/cars`) or, for shelves the site files under no
+     * category of their own, its search listing (`/search?q=girls`) — both
+     * answer with the same album anchors. The feed walks that list with the
+     * same merge machinery as search, three albums per page, and drops ids
+     * an earlier page of this session already served. A page whose whole
      * batch was duplicates consumes the next batch instead of stranding the
      * feed — the host appends pages one by one and an empty-but-not-final
      * page would stall the carousel.
      */
     private suspend fun categoryFeed(
-        curatedSlug: String,
-        categorySlug: String,
+        category: CategorySpec,
         page: Int,
     ): Page {
         if (page < 1 || page > MAX_CATEGORY_PAGES) return Page(emptyList(), nextPage = null)
@@ -282,14 +309,14 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
             // A feed restart begins a new session: forget what an earlier
             // session served so the curated topic comes back whole.
             synchronized(lock) {
-                categorySeenIds.remove(categorySlug)
-                categoryCursor.remove(categorySlug)
+                categorySeenIds.remove(category.term)
+                categoryCursor.remove(category.term)
             }
-            val curated = freshInCategory(categorySlug, wallpapersOfTopic(curatedSlug))
+            val curated = freshInCategory(category.term, wallpapersOfTopic(category.curatedTopic))
             return Page(curated, nextPage = 2)
         }
-        val albums = categoryAlbums(categorySlug)
-        var cursor = synchronized(lock) { categoryCursor[categorySlug] ?: 0 }
+        val albums = categoryAlbums(category)
+        var cursor = synchronized(lock) { categoryCursor[category.term] ?: 0 }
         val fresh = mutableListOf<Wallpaper>()
         while (fresh.isEmpty() && cursor < albums.size) {
             albums
@@ -298,25 +325,33 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
                 .forEach { album ->
                     runCatching { wallpapersOfTopic(album.slug) }
                         .getOrNull()
-                        ?.let { items -> fresh += freshInCategory(categorySlug, items) }
+                        ?.let { items -> fresh += freshInCategory(category.term, items) }
                 }
             cursor += ALBUMS_PER_SEARCH_PAGE
         }
-        synchronized(lock) { categoryCursor[categorySlug] = cursor }
+        synchronized(lock) { categoryCursor[category.term] = cursor }
         val moreRemain = cursor < albums.size && page < MAX_CATEGORY_PAGES
         return Page(fresh, nextPage = if (moreRemain) page + 1 else null)
     }
 
-    /** Drops ids this category's session already served; remembers the rest. */
+    /**
+     * Drops ids this category's session already served; remembers the rest,
+     * oldest first out past the cap. Pages never revisit albums, so the set
+     * only guards overlap between recently walked ones — past the cap a
+     * duplicate slips through rather than the set growing without end.
+     */
     private fun freshInCategory(
-        categorySlug: String,
+        term: String,
         wallpapers: List<Wallpaper>,
     ): List<Wallpaper> {
         if (wallpapers.isEmpty()) return wallpapers
         synchronized(lock) {
-            val seen = categorySeenIds.getOrPut(categorySlug) { LinkedHashSet() }
+            val seen = categorySeenIds.getOrPut(term) { LinkedHashSet() }
             val fresh = wallpapers.filter { it.id !in seen }
             fresh.forEach { seen.add(it.id) }
+            while (seen.size > CATEGORY_SEEN_LIMIT) {
+                seen.remove(seen.first())
+            }
             return fresh
         }
     }
@@ -346,9 +381,9 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
     private suspend fun albumsFor(query: String): List<WallpaperCaveParser.Album> =
         cachedAlbums("q:${query.trim().lowercase()}") { "$BASE_URL/search?q=${encode(query)}" }
 
-    /** The albums a category page lists, cached the same way. */
-    private suspend fun categoryAlbums(categorySlug: String): List<WallpaperCaveParser.Album> =
-        cachedAlbums("cat:$categorySlug") { "$BASE_URL/categories/$categorySlug" }
+    /** The album list a category's stream walks, cached the same way. */
+    private suspend fun categoryAlbums(category: CategorySpec): List<WallpaperCaveParser.Album> =
+        cachedAlbums("cat:${category.term}") { "$BASE_URL${category.streamPath}" }
 
     /** One album list, fetched on demand and cached for one pagination session. */
     private suspend fun cachedAlbums(
@@ -478,6 +513,21 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
 
     private fun now(): Long = System.currentTimeMillis()
 
+    /**
+     * One browse tab's category: the term its section carries, the curated
+     * topic behind page one, the album stream behind pages 2+, and whether
+     * the host's own filter vocabulary has a `category` value for it (only
+     * `anime` and `people` do — the rest reach the feed as tag-style query
+     * presets the host routes through [search]).
+     */
+    private data class CategorySpec(
+        val term: String,
+        val title: String,
+        val curatedTopic: String,
+        val streamPath: String,
+        val asHostCategory: Boolean = false,
+    )
+
     private data class CachedAlbums(
         val albums: List<WallpaperCaveParser.Album>,
         val at: Long,
@@ -487,13 +537,31 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
         const val ID = "cloudimage.wallpapercave"
         const val BASE_URL = "https://wallpapercave.com"
 
-        /** Curated topics backing a category's first page. */
-        const val ANIME_TOPIC = "anime-wallpapers"
-        const val PEOPLE_TOPIC = "people-wallpapers"
+        /**
+         * The browse tabs beyond the latest feed, in tab-bar order: the
+         * curated topic behind page one and the album stream behind pages
+         * 2+ (every slug and path verified live). `anime` and `people` also
+         * ride the host's category vocabulary; the rest reach [search] as
+         * tag-style query presets.
+         */
+        val browseTabs =
+            listOf(
+                CategorySpec("anime", "Anime", "anime-wallpapers", "/categories/anime-manga", asHostCategory = true),
+                CategorySpec("girls", "Girls", "girls-wallpapers", "/search?q=girls"),
+                CategorySpec("cars", "Cars", "cars-wallpapers", "/categories/vehicles/cars"),
+                CategorySpec("people", "People", "people-wallpapers", "/categories/people", asHostCategory = true),
+                CategorySpec("games", "Games", "games-wallpapers", "/categories/games"),
+                CategorySpec("movies", "Movies", "movies-wallpapers", "/categories/movies"),
+                CategorySpec("nature", "Nature", "nature-wallpapers", "/categories/nature"),
+                CategorySpec("space", "Space", "space-wallpapers", "/categories/universe"),
+                CategorySpec("animals", "Animals", "animals-wallpapers", "/categories/nature/animals"),
+                CategorySpec("bikes", "Bikes", "motorcycles-wallpapers", "/categories/vehicles/motorcycles"),
+                CategorySpec("sports", "Sports", "sports-wallpapers", "/categories/sports"),
+                CategorySpec("abstract", "Abstract", "abstract-wallpapers", "/categories/abstract"),
+            )
 
-        /** The site's own category pages, the album stream behind pages 2+. */
-        const val ANIME_CATEGORY = "anime-manga"
-        const val PEOPLE_CATEGORY = "people"
+        /** The same tabs keyed by the exact term a query preset carries. */
+        val categoryByTerm: Map<String, CategorySpec> = browseTabs.associateBy { it.term }
 
         /** Search batching: three albums per page, ten pages deep at most. */
         const val ALBUMS_PER_SEARCH_PAGE = 3
@@ -502,9 +570,12 @@ class WallpaperCaveWallpaperProvider : WallpaperProvider {
         /** Category feeds: curated topic, then the album stream, this deep at most. */
         const val MAX_CATEGORY_PAGES = 15
 
-        /** Album-list cache: one pagination session, four concurrent queries. */
+        /** Served-id window per category; overlap never spans this far. */
+        const val CATEGORY_SEEN_LIMIT = 1_500
+
+        /** Album-list cache: one pagination session, interleaved tabs. */
         const val SEARCH_CACHE_MS = 60_000L
-        const val SEARCH_CACHE_SLOTS = 4
+        const val SEARCH_CACHE_SLOTS = 8
 
         /** Latest-feed dedupe window and the tag pool feeding suggestions. */
         const val RECENT_IDS_LIMIT = 500

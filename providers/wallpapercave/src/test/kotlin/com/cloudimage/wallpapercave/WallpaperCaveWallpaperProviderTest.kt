@@ -433,6 +433,140 @@ class WallpaperCaveWallpaperProviderTest {
         }
 
     @Test
+    fun `a query preset walks its category feed - curated topic then stream`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://wallpapercave.com/girls-wallpapers" to
+                            ok(topicPage("wpG1|wpG1.webp|1000|1600|Curated Girls")),
+                        "https://wallpapercave.com/search?q=girls" to
+                            ok(
+                                """
+                                <a href="/lbx-girls-wallpapers" class="albumthumbnail" title="70 wallpapers in LBX Girls Wallpapers"><div class="aall" photos="70"></div></a>
+                                <a href="/iranian-girls-wallpapers" class="albumthumbnail" title="12 wallpapers in Iranian Girls Wallpapers"><div class="aall" photos="12"></div></a>
+                                """.trimIndent(),
+                            ),
+                        "https://wallpapercave.com/lbx-girls-wallpapers" to
+                            ok(topicPage("wpL1|wpL1.webp|1920|1080|LBX Girls")),
+                        "https://wallpapercave.com/iranian-girls-wallpapers" to
+                            ok(topicPage("wpI1|wpI1.webp|1920|1080|Iranian Girls")),
+                    ),
+                )
+
+            val first = provider.search("girls", page = 1).getOrThrow()
+            val second = provider.search("girls", page = 2).getOrThrow()
+
+            assertEquals("https://wallpapercave.com/girls-wallpapers", client.requests.first())
+            assertEquals(listOf("wpG1"), first.wallpapers.map { it.id })
+            assertEquals(2, first.nextPage)
+            // The girls shelf has no category page of its own - its stream is
+            // the search listing, the same album anchors.
+            assertEquals("https://wallpapercave.com/search?q=girls", client.requests[1])
+            assertEquals(listOf("wpL1", "wpI1"), second.wallpapers.map { it.id })
+            assertNull(second.nextPage)
+        }
+
+    @Test
+    fun `the cars tab walks the vehicles category stream`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://wallpapercave.com/cars-wallpapers" to
+                            ok(topicPage("wpC1|wpC1.webp|1920|1080|Curated Cars")),
+                        "https://wallpapercave.com/categories/vehicles/cars" to
+                            ok(
+                                """
+                                <a href="/acura-wallpapers" class="albumthumbnail" title="30 wallpapers in Acura Wallpapers"><div class="aall" photos="30"></div></a>
+                                <a href="/alfa-romeo-wallpapers" class="albumthumbnail" title="55 wallpapers in Alfa Romeo Wallpapers"><div class="aall" photos="55"></div></a>
+                                """.trimIndent(),
+                            ),
+                        "https://wallpapercave.com/acura-wallpapers" to ok(topicPage("wpAC|wpAC.webp|1920|1080|Acura")),
+                        "https://wallpapercave.com/alfa-romeo-wallpapers" to ok(topicPage("wpAR|wpAR.webp|1920|1080|Alfa Romeo")),
+                    ),
+                )
+
+            val first = provider.search("cars", page = 1).getOrThrow()
+            val second = provider.search("cars", page = 2).getOrThrow()
+
+            assertEquals(listOf("wpC1"), first.wallpapers.map { it.id })
+            assertEquals(2, first.nextPage)
+            assertEquals(listOf("wpAC", "wpAR"), second.wallpapers.map { it.id })
+            assertNull(second.nextPage)
+            assertEquals("https://wallpapercave.com/categories/vehicles/cars", client.requests[1])
+        }
+
+    @Test
+    fun `category terms match exactly, case and whitespace insensitive`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://wallpapercave.com/cars-wallpapers" to
+                            ok(topicPage("wpC1|wpC1.webp|1920|1080|Curated Cars")),
+                        "https://wallpapercave.com/girls-wallpapers" to
+                            ok(topicPage("wpG1|wpG1.webp|1000|1600|Curated Girls")),
+                        "https://wallpapercave.com/search" to ok(searchAlbums),
+                        "https://wallpapercave.com/1920x1080-manga-wallpapers" to
+                            ok(topicPage("wp1|wp1.webp|1920|1080|Manga Cover")),
+                    ),
+                )
+
+            // The exact term in any case, even padded, walks its feed.
+            provider.search("CARS", page = 1).getOrThrow()
+            assertEquals("https://wallpapercave.com/cars-wallpapers", client.requests.first())
+            provider.search("  Girls ", page = 1).getOrThrow()
+            assertEquals("https://wallpapercave.com/girls-wallpapers", client.requests[1])
+
+            // A longer phrase or a different word is a query like any other.
+            provider.search("girls aesthetic", page = 1).getOrThrow()
+            assertTrue("https://wallpapercave.com/search?q=girls+aesthetic" in client.requests)
+            provider.search("car", page = 1).getOrThrow()
+            assertTrue("https://wallpapercave.com/search?q=car" in client.requests)
+        }
+
+    @Test
+    fun `interleaved tabs keep their sessions separate`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://wallpapercave.com/cars-wallpapers" to
+                            ok(topicPage("wpC1|wpC1.webp|1920|1080|Curated Cars")),
+                        "https://wallpapercave.com/girls-wallpapers" to
+                            ok(topicPage("wpG1|wpG1.webp|1000|1600|Curated Girls")),
+                        "https://wallpapercave.com/categories/vehicles/cars" to
+                            ok(
+                                """
+                                <a href="/acura-wallpapers" class="albumthumbnail" title="30 wallpapers in Acura Wallpapers"><div class="aall" photos="30"></div></a>
+                                """.trimIndent(),
+                            ),
+                        "https://wallpapercave.com/search?q=girls" to
+                            ok(
+                                """
+                                <a href="/lbx-girls-wallpapers" class="albumthumbnail" title="70 wallpapers in LBX Girls Wallpapers"><div class="aall" photos="70"></div></a>
+                                """.trimIndent(),
+                            ),
+                        "https://wallpapercave.com/acura-wallpapers" to ok(topicPage("wpAC|wpAC.webp|1920|1080|Acura")),
+                        "https://wallpapercave.com/lbx-girls-wallpapers" to ok(topicPage("wpL1|wpL1.webp|1920|1080|LBX Girls")),
+                    ),
+                )
+
+            // Users swipe between tabs: each feed's cursor and seen-ids stay its own.
+            provider.search("cars", page = 1).getOrThrow()
+            provider.search("girls", page = 1).getOrThrow()
+            val carsTwo = provider.search("cars", page = 2).getOrThrow()
+            val girlsTwo = provider.search("girls", page = 2).getOrThrow()
+
+            assertEquals(listOf("wpAC"), carsTwo.wallpapers.map { it.id })
+            assertEquals(listOf("wpL1"), girlsTwo.wallpapers.map { it.id })
+            // Each stream page was fetched exactly once for its own tab.
+            assertEquals(1, client.requests.count { it == "https://wallpapercave.com/categories/vehicles/cars" })
+            assertEquals(1, client.requests.count { it == "https://wallpapercave.com/search?q=girls" })
+        }
+
+    @Test
     fun `a category stops at its page cap without another request`() =
         runTest {
             val client = configureWith(emptyMap())
@@ -673,8 +807,34 @@ class WallpaperCaveWallpaperProviderTest {
 
             val sections = provider.sections()
 
-            assertEquals(listOf("latest", "anime", "people"), sections.map { it.id })
+            assertEquals(
+                listOf(
+                    "latest",
+                    "anime",
+                    "girls",
+                    "cars",
+                    "people",
+                    "games",
+                    "movies",
+                    "nature",
+                    "space",
+                    "animals",
+                    "bikes",
+                    "sports",
+                    "abstract",
+                ),
+                sections.map { it.id },
+            )
             assertEquals("Latest Uploads", sections.first().title)
+            assertEquals("Girls", sections.single { it.id == "girls" }.title)
+            assertEquals("Cars", sections.single { it.id == "cars" }.title)
+            // Anime and people ride the host's own category values...
+            assertEquals(setOf("anime"), sections.single { it.id == "anime" }.filters.valuesFor("category"))
+            assertEquals(setOf("people"), sections.single { it.id == "people" }.filters.valuesFor("category"))
+            // ...every other shelf is a tag-style query preset the host routes through search().
+            listOf("girls", "cars", "games", "movies", "nature", "space", "animals", "bikes", "sports", "abstract").forEach { id ->
+                assertEquals(setOf(id), sections.single { it.id == id }.filters.valuesFor("query"))
+            }
             assertTrue(client.requests.isEmpty())
         }
 
