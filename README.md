@@ -36,7 +36,7 @@ their files' TRUE dimensions right in the grid, verified pixel-exact.
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.wallpaperaccess` | 1.2.0 | 19 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpaperaccess` | 1.3.0 | 19 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -259,7 +259,7 @@ tests):
 
 The fourth scraper, built for a collection-first site with a rare gift:
 its listings publish each file's TRUE dimensions right in the grid
-(~460 source lines plus 600 lines of tests):
+(~1,080 source lines plus 1,500 lines of tests):
 
 - **True dimensions, zero requests.** Every wallpaper cell carries
   `data-or="3840x2160"` — the file's own dimensions — verified
@@ -279,9 +279,16 @@ its listings publish each file's TRUE dimensions right in the grid
   matches `fall-leaves`, never `waterfall`) — so the Nature tab stays
   nature; the two ranked mixed feeds (Popular, Latest) ride the Related
   Wallpapers band, the site's own cross-theme "keep browsing"
-  recommendations, honest for a mixed feed. A dead link is skipped
-  gracefully; a theme that runs out ends the feed with `nextPage` null.
-  The sitemap is read once per session, whatever the tab count.
+  recommendations, honest for a mixed feed. A walked page that brings
+  NO wallpapers — the collection 404s, or answers 200 with a body that
+  carries no cells — ends the walk with `nextPage` null, never an empty
+  page that still claims more: that empty-but-keep-scrolling answer is
+  exactly the stall 1.3.0 removed. An unreadable sitemap is a retryable
+  error that goes quiet for a minute before the next attempt — reported
+  to the host's retry footer, never a silent session-long end, and never
+  a request storm. A root whose address names no theme word (`4k`,
+  `wallpapers`, digits only) never offers page two at all. The sitemap
+  is read once per session, whatever the tab count.
 - **Previews and originals by directory.** Cells disclose
   `data-fullimg="/full/{id}.{ext}"` — the original file served directly
   — and the same filename under `/thumb/` is the site's lighter
@@ -305,26 +312,34 @@ its listings publish each file's TRUE dimensions right in the grid
   themed tabs rode in 1.1.0, which drifted a Nature tab into space
   wallpapers mid-scroll — the band stays reserved for the two ranked
   mixed feeds, where cross-theme is the honest continuation.)
+  (1.3.0: the walk contract grew teeth after the themed tabs were
+  reported stalling mid-scroll — a page that brings nothing now ends
+  its walk instead of freezing the feed, and a Cloudflare-refused
+  sitemap surfaces as a retryable error with a one-minute cooldown
+  instead of silently ending every themed tab for the session.)
 - **Details re-walk the listing.** The id IS the re-fetch address,
   `collection/fileName`, so `details()` re-serves the cell's own record
   — original, true dimensions, alt-derived title, owning collection as
   tag — with the site's own share URL (`collection#id`) as the source
   link. No author, no file size: honest nulls, never inventions.
-- **Verified.** 41 unit tests from real captured markup (both img
+- **Verified.** 45 unit tests from real captured markup (both img
   flavors — `src` and lazy `data-src`, attribute-order shuffles, the
   newline-spanning `data-download` value, malformed-cell isolation,
   404 and homepage-card shapes, entity-escaped titles, duplicate-cell
   insurance, slugify, the related-band walk with warm and cold caches,
-  dead-card skip, band exhaustion, self-link/non-collection/duplicate
-  pruning, the sitemap walk — theme-token stripping, token-boundary
-  matching, the never-off-theme regression, single-read caching,
-  honest ends for empty themes and unreadable sitemaps) plus a gated
+  dead-card and zero-cell walk ends, band exhaustion,
+  self-link/non-collection/duplicate pruning, the sitemap walk —
+  theme-token stripping, token-boundary matching, the never-off-theme
+  regression, single-read caching, honest ends for empty themes,
+  retryable sitemap failures with their one-minute quiet, and the
+  no-theme root that never offers page two) plus a gated
   `WallpaperAccessLiveCheckTest`
   (`WALLPAPERACCESS_LIVE=1`): the popular batch with dimensions on
   every item, `data-or` against the file's own pixels, the lighter
   thumb, fresh and category listings, the related walk serving a real
   second batch from a sibling collection, the themed Nature tab
-  staying on theme through deep scroll pages, slug-guess hit and
+  staying on theme through deep scroll pages, the Anime tab's deep
+  pages staying on theme without ever stalling, slug-guess hit and
   honest miss, details round-trip, and a portrait-shape guard — all
   green against the live site.
 

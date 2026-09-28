@@ -21,7 +21,10 @@ import org.junit.Test
  * nature — never the site's mixed Related band), the robots-compliant
  * slug-guess search with its 404-is-a-miss contract, the detail record
  * re-walked from the id's own listing, and the host-vocabulary routing
- * all stay covered without a network.
+ * all stay covered without a network. The walk contract has teeth: a
+ * page that brings no wallpapers never offers a next page (the 1.2.0
+ * stall), a dead link ends its walk, and an unreadable sitemap is a
+ * retryable error that goes quiet for a minute rather than storming.
  *
  * Walk tests drive FRESH provider instances — the walk caches are
  * instance state, and a test must never depend on the caches another
@@ -354,7 +357,7 @@ class WallpaperAccessWallpaperProviderTest {
         }
 
     @Test
-    fun `a dead card is skipped with the walk kept alive`() =
+    fun `a dead card ends the walk instead of stalling the feed`() =
         runTest {
             val (fresh, client) =
                 freshProvider(
@@ -365,21 +368,49 @@ class WallpaperAccessWallpaperProviderTest {
                     ),
                 )
 
-            val skipped = fresh.popular(page = 2).getOrThrow()
+            val ended = fresh.popular(page = 2).getOrThrow()
 
             // The site's own card points at a page it no longer serves —
-            // an empty page whose nextPage keeps the walk going.
-            assertTrue(skipped.wallpapers.isEmpty())
-            assertEquals(3, skipped.nextPage)
+            // the content is gone, so the walk ends. An empty page that
+            // still advertised a next page froze the host's tab on the
+            // spot: the pager waited on content that never came. That
+            // was 1.2.0's stall, and it never comes back.
+            assertTrue(ended.wallpapers.isEmpty())
+            assertNull(ended.nextPage)
+            assertEquals(
+                "the dead card may not chase the next one",
+                listOf(
+                    "https://wallpaperaccess.com/most-popular",
+                    "https://wallpaperaccess.com/flowers",
+                ),
+                client.requests,
+            )
+        }
 
-            val next = fresh.popular(page = 3).getOrThrow()
-            assertEquals("stars/900002.jpg", next.wallpapers.single().id)
-            assertNull(next.nextPage)
+    @Test
+    fun `a walked page that serves no cells ends the walk`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/most-popular" to ok(popularGrid + relatedBand("flowers", "stars")),
+                        "https://wallpaperaccess.com/flowers" to ok(notFoundPage),
+                        "https://wallpaperaccess.com/stars" to ok(walkedGrid("stars", "900002")),
+                    ),
+                )
+
+            val ended = fresh.popular(page = 2).getOrThrow()
+
+            // A 200 whose body carries no wallpaper cells is not a
+            // listing — challenge leftovers, a redesigned page. The walk
+            // ends honestly rather than stalling the feed or serving
+            // garbage.
+            assertTrue(ended.wallpapers.isEmpty())
+            assertNull(ended.nextPage)
             assertEquals(
                 listOf(
                     "https://wallpaperaccess.com/most-popular",
                     "https://wallpaperaccess.com/flowers",
-                    "https://wallpaperaccess.com/stars",
                 ),
                 client.requests,
             )
@@ -406,19 +437,25 @@ class WallpaperAccessWallpaperProviderTest {
         }
 
     @Test
-    fun `a vanished root ends the walk honestly`() =
+    fun `a vanished ranked root ends the walk honestly`() =
         runTest {
-            val (fresh, _) =
+            val (fresh, client) =
                 freshProvider(
                     linkedMapOf(
-                        "https://wallpaperaccess.com/fall" to notFound(),
+                        "https://wallpaperaccess.com/most-popular" to notFound(),
                     ),
                 )
 
-            val page = fresh.search(query = "fall", page = 2).getOrThrow()
+            // A fresh instance resuming mid-scroll refetches the ranked
+            // root for its band; a root the site no longer serves ends
+            // the walk — an honest empty page, no error, no next. (A
+            // themed root is never refetched at all: its walk reads the
+            // sitemap, not the root.)
+            val page = fresh.popular(page = 2).getOrThrow()
 
             assertTrue(page.wallpapers.isEmpty())
             assertNull(page.nextPage)
+            assertEquals(listOf("https://wallpaperaccess.com/most-popular"), client.requests)
         }
 
     @Test
@@ -629,7 +666,7 @@ class WallpaperAccessWallpaperProviderTest {
         }
 
     @Test
-    fun `an unreadable sitemap ends the themed walk without an error`() =
+    fun `an unreadable sitemap is a retryable error, never a silent end`() =
         runTest {
             val (fresh, client) =
                 freshProvider(
@@ -642,12 +679,14 @@ class WallpaperAccessWallpaperProviderTest {
             val first = fresh.search(query = "nature", page = 1).getOrThrow()
             assertEquals(2, first.nextPage)
 
-            val second = fresh.search(query = "nature", page = 2).getOrThrow()
+            val second = fresh.search(query = "nature", page = 2)
 
-            // A challenge page is zero siblings, never a crash — the
-            // feed ends where the site's readable surface ends.
-            assertTrue(second.wallpapers.isEmpty())
-            assertNull(second.nextPage)
+            // A challenged sitemap must not silently end every themed
+            // tab for the whole session — 1.2.0 did exactly that. The
+            // tab already holds its root batch; the failure is reported
+            // to the host's retry footer, and the walk recovers when the
+            // site does.
+            assertTrue(second.isFailure)
             assertEquals(
                 listOf(
                     "https://wallpaperaccess.com/nature",
@@ -655,6 +694,67 @@ class WallpaperAccessWallpaperProviderTest {
                 ),
                 client.requests,
             )
+        }
+
+    @Test
+    fun `a failed sitemap goes quiet before another attempt`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/sitemap.xml" to ProviderHttpResponse(500, emptyMap(), ByteArray(0)),
+                        "https://wallpaperaccess.com/nature" to ok(fallGrid),
+                        "https://wallpaperaccess.com/space" to ok(fallGrid),
+                    ),
+                )
+
+            fresh.search(query = "nature", page = 1).getOrThrow()
+            assertTrue(fresh.search(query = "nature", page = 2).isFailure)
+
+            // Another tab's deeper page inside the cooldown window: the
+            // failure is reported again WITHOUT a second sitemap request —
+            // a host that just refused one must not be hammered for
+            // every tab that scrolls.
+            assertTrue(fresh.search(query = "space", page = 2).isFailure)
+            assertEquals(1, client.requests.count { it.endsWith("/sitemap.xml") })
+        }
+
+    @Test
+    fun `a sitemap that serves no collections is the same retryable failure`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/sitemap.xml" to ok("<html>Attention Required!</html>"),
+                        "https://wallpaperaccess.com/nature" to ok(fallGrid),
+                    ),
+                )
+
+            // A challenge body with a 200 status code must not be cached
+            // as the session's truth — every themed tab would end after
+            // its root batch until the app restarted.
+            assertTrue(fresh.search(query = "nature", page = 2).isFailure)
+            assertEquals(1, client.requests.count { it.endsWith("/sitemap.xml") })
+        }
+
+    @Test
+    fun `a root that names no theme never offers a theme walk`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/4k-wallpapers" to ok(fallGrid),
+                    ),
+                )
+
+            val page = fresh.search(query = "4k wallpapers", page = 1).getOrThrow()
+
+            // `4k` and `wallpapers` name nothing a collection is about —
+            // there is no honest continuation, so the offer is never
+            // made and the doomed page two is never requested.
+            assertEquals("4k-wallpapers/343386.jpg", page.wallpapers.single().id)
+            assertNull(page.nextPage)
+            assertEquals(listOf("https://wallpaperaccess.com/4k-wallpapers"), client.requests)
         }
 
     @Test

@@ -292,12 +292,52 @@ class WallpaperAccessLiveCheckTest {
                         page.wallpapers.all { it.id.startsWith("$collection/") },
                     )
                 }
+                assertTrue(
+                    "a deep page brought nothing yet still offered more — the 1.2.0 stall",
+                    page.wallpapers.isNotEmpty() || page.nextPage == null,
+                )
                 nextPage = page.nextPage
             }
             assertTrue(
                 "expected at least two deep nature batches, got $deepBatches",
                 deepBatches >= 2,
             )
+        }
+
+    @Test
+    fun `the anime tab's deep pages stay on theme without stalling`() =
+        runTest {
+            assumeTrue(live())
+            val configured = configured()
+            val first = configured.popular(page = 1, filters = Filters.of("category" to "anime")).getOrThrow()
+            assumeTrue("no continuation offered right now", first.nextPage != null)
+
+            // The tab the 1.2.0 stall was reported on: its deep pages
+            // must serve on-theme batches from the sitemap walk, and a
+            // page that brings nothing must end the walk — never an
+            // empty page that still claims more.
+            val theme = listOf("anime")
+            var deepBatches = 0
+            var nextPage = first.nextPage
+            while (nextPage != null && deepBatches < 2) {
+                val page =
+                    configured
+                        .popular(page = nextPage, filters = Filters.of("category" to "anime"))
+                        .getOrThrow()
+                assertTrue(
+                    "a deep page brought nothing yet still offered more — the 1.2.0 stall",
+                    page.wallpapers.isNotEmpty() || page.nextPage == null,
+                )
+                page.wallpapers.firstOrNull()?.id?.substringBefore('/')?.let { collection ->
+                    deepBatches++
+                    assertTrue(
+                        "'$collection' is off the anime theme",
+                        WallpaperAccessParser.matchesTheme(collection, theme),
+                    )
+                }
+                nextPage = page.nextPage
+            }
+            assertTrue("expected at least one deep anime batch, got $deepBatches", deepBatches >= 1)
         }
 
     // --------------------------------------------------- image dimension sniff

@@ -99,7 +99,10 @@ import com.cloudimage.provider.api.WallpaperProvider
  * slug addresses, the same links the site's own navigation serves every
  * visitor. The sitemap is read once per provider instance — the one
  * surface the site publishes precisely for automated readers, a single
- * request no matter how many tabs the session scrolls. Page one of a
+ * request no matter how many tabs the session scrolls — and a sitemap
+ * the site refuses or serves unreadable goes quiet for a full minute
+ * before the next attempt, so one bad moment cannot become a retry
+ * storm. Page one of a
  * feed costs one request returning the whole batch — a browser tab on
  * the same page costs the same; each deeper page costs one or two (the
  * walked collection, plus the root band or sitemap when this instance
@@ -118,7 +121,8 @@ import com.cloudimage.provider.api.WallpaperProvider
  * The contract asks plugins to be stateless; the only mutable state is
  * optional caches that never gate correctness — the collection-name pool
  * feeding [suggestTags], the related-band cache feeding the ranked
- * walks, and the sitemap cache feeding the theme walks. A fresh instance
+ * walks, the sitemap cache feeding the theme walks, and the minute of
+ * quiet a refused sitemap keeps to stop retry storms. A fresh instance
  * answers identically, at worst re-fetching a root band or the sitemap it
  * has not seen (one extra request, self-healing) or without suggestions.
  * All caches are guarded by one lock; sections load in parallel on the
@@ -140,7 +144,7 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperAccess",
-            versionName = "1.2.0",
+            versionName = "1.3.0",
             author = "Cloudimage",
             description = "HD, 4K and up wallpapers from wallpaperaccess.com - scraped, keyless.",
             // The site curates its collections and carries no per-item
@@ -318,11 +322,14 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
      * own order; every themed root (tab presets, host categories, search
      * hits) walks its SAME-THEME siblings from the site's public sitemap
      * — the Nature tab stays nature, the Space tab stays space. A walked
-     * collection that no longer answers 404 is skipped gracefully — an
-     * empty page whose `nextPage` keeps the walk alive, which the host's
-     * merged feed already understands. The walked collection's own slug
-     * rides in every item's id, so [details] re-walks the listing the
-     * item actually came from.
+     * page that brings NO wallpapers — the collection 404s, or answers
+     * 200 with a body that carries no cells — ends the walk with
+     * `nextPage` null, never an empty page that still offers more: the
+     * host's pager would wait on content that never comes, and the tab
+     * would stall exactly the way 1.2.0's users saw. Any other failure
+     * is the source error it is, answered to the host's retry footer.
+     * The walked collection's own slug rides in every item's id, so
+     * [details] re-walks the listing the item actually came from.
      */
     private suspend fun listingPage(
         rootSlug: String,
@@ -352,15 +359,23 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
                         // siblings; the sitemap is read lazily on the
                         // first deeper page, so opening a tab costs exactly
                         // one request. The optimistic `nextPage` is
-                        // resolved there: a theme with no siblings (or an
-                        // unreadable sitemap) ends the feed with an honest
-                        // empty page, and a root batch of zero cells has
-                        // nothing to continue from at all.
-                        else ->
+                        // resolved there: a theme with no siblings ends
+                        // the feed with an honest empty page, an
+                        // unreadable sitemap is reported as the retryable
+                        // error it is, and a root batch of zero cells has
+                        // nothing to continue from at all. A root whose
+                        // address names no theme word (`4k`, `wallpapers`,
+                        // digits only) can never walk: the offer is never
+                        // made, so no page two is requested just to hear it.
+                        else -> {
+                            val walkable =
+                                batch.isNotEmpty() &&
+                                    WallpaperAccessParser.themeTokensOf(rootSlug).isNotEmpty()
                             Page(
                                 batch,
-                                nextPage = if (batch.isEmpty()) null else 2,
+                                nextPage = if (walkable) 2 else null,
                             )
+                        }
                     }
                 }
                 // A search address that does not exist is a miss; a broken
@@ -376,14 +391,23 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         val more = index + 1 < walk.size
         val response = get("$BASE_URL/$target")
         return when {
-            response.isSuccessful ->
-                Page(
-                    gridWallpapers(response.bodyText, target),
-                    nextPage = if (more) page + 1 else null,
-                )
-            // The site's own link points at a page it no longer serves —
-            // skip it and let the next page continue the walk.
-            response.statusCode == 404 -> Page(emptyList(), nextPage = if (more) page + 1 else null)
+            response.isSuccessful -> {
+                val batch = gridWallpapers(response.bodyText, target)
+                // A 200 whose body carries no wallpaper cells is not a
+                // listing — challenge leftovers, a redesigned page — and
+                // the walk ends rather than stalling the feed with an
+                // empty page that still claims more.
+                if (batch.isEmpty()) {
+                    Page(emptyList(), nextPage = null)
+                } else {
+                    Page(batch, nextPage = if (more) page + 1 else null)
+                }
+            }
+            // The site's own link points at a page it no longer serves:
+            // the content is gone and the walk ends. An empty page that
+            // still advertised a next page froze the host's tab in place
+            // — 1.2.0's stall, never again.
+            response.statusCode == 404 -> Page(emptyList(), nextPage = null)
             else -> throw httpError(response.statusCode)
         }
     }
@@ -414,10 +438,13 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
      * `space` walks `space-opera`, `space-jellyfish`, … — never the
      * mixed-theme cards a Related band would deal. A root whose address
      * names no theme word (`4k`, `wallpaper`, digits only) cannot walk
-     * honestly, and its feed ends after its batch. The sitemap's
-     * contents are the site's choice, not a promise: a challenge or a
-     * failure reads as zero siblings and the feed ends the same honest
-     * way — never an error over an auxiliary surface.
+     * honestly, and its feed ends after its batch. A sitemap the site
+     * refuses or serves unreadable raises a RETRYABLE source error
+     * instead of a silent end: the tab already holds its root batch, the
+     * host's error footer offers the retry, and the failure's minute of
+     * quiet keeps that retry from hammering a host that just said no —
+     * 1.2.0 answered this by ending every themed tab for the whole
+     * session, which is how its users lost their feeds.
      */
     private suspend fun siblingListOf(rootSlug: String): List<String> {
         synchronized(lock) { siblingCache[rootSlug] }?.let { return it }
@@ -433,14 +460,23 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
     }
 
     /**
-     * The sitemap's collection addresses — fetched once per instance,
-     * cached only on a successful read (a transient failure must not
-     * poison the whole session; the next deeper page simply retries).
-     * The sitemap is the site's own publication surface for automated
-     * readers; one request per session, no matter how many tabs scroll.
+     * The sitemap's collection addresses — fetched once per instance and
+     * cached on a successful read. The sitemap is the site's own
+     * publication surface for automated readers; one request per session,
+     * no matter how many tabs scroll. A read that fails — refused,
+     * challenged, or a 200 whose body carries no collections — is never
+     * cached as the session's truth: it raises the retryable source
+     * error the host's footer knows how to offer again, and the failure
+     * is remembered for [SITEMAP_RETRY_COOLDOWN_MS] so one bad moment
+     * costs a single request, not a request per retry per tab.
      */
     private suspend fun sitemapSlugs(): List<String> {
-        synchronized(lock) { sitemapCache }?.let { return it }
+        synchronized(lock) {
+            sitemapCache?.let { return it }
+            if (sitemapRetryAt != 0L && System.currentTimeMillis() < sitemapRetryAt) {
+                throw sitemapUnavailable()
+            }
+        }
         val response = get(SITEMAP_URL)
         val slugs =
             if (response.isSuccessful) {
@@ -448,11 +484,24 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
             } else {
                 emptyList()
             }
-        if (response.isSuccessful) {
-            synchronized(lock) { sitemapCache = slugs }
+        if (!response.isSuccessful || slugs.isEmpty()) {
+            synchronized(lock) {
+                sitemapRetryAt = System.currentTimeMillis() + SITEMAP_RETRY_COOLDOWN_MS
+            }
+            throw sitemapUnavailable()
+        }
+        synchronized(lock) {
+            sitemapCache = slugs
+            sitemapRetryAt = 0L
         }
         return slugs
     }
+
+    /** The retryable answer for a sitemap this instance cannot read. */
+    private fun sitemapUnavailable(): IllegalStateException =
+        IllegalStateException(
+            "wallpaperaccess sitemap is unreadable — the themed continuation is unavailable",
+        )
 
     /**
      * Parses and caches a listing's related band. The cache is a cost
@@ -573,6 +622,13 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
          */
         const val RELATED_CACHE_LIMIT = 32
 
+        /**
+         * How long a refused or unreadable sitemap stays quiet before
+         * the next attempt — matched to the host's own Cloudflare
+         * failure cooldown, so both layers recover together.
+         */
+        const val SITEMAP_RETRY_COOLDOWN_MS = 60_000L
+
         /** One lock over the pools; sections load in parallel. */
         val lock = Any()
     }
@@ -587,4 +643,11 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
 
     /** The sitemap's collection addresses, once per instance; guarded by [lock]. */
     private var sitemapCache: List<String>? = null
+
+    /**
+     * When a failed sitemap read may be attempted again, in epoch
+     * millis; 0 while the last read succeeded or none has failed.
+     * Guarded by [lock].
+     */
+    private var sitemapRetryAt = 0L
 }
