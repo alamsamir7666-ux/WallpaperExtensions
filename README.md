@@ -45,7 +45,7 @@ demands.
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.alphacoders` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.wallpapersafari` | 1.0.0 | 26 KB | popular, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpapersafari` | 1.0.1 | 26 KB | popular, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -118,7 +118,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 providers/hdqwalls/          the second extension, same layout (21 tests)
 providers/wallpapers4k/      the third extension, same layout (27 tests)
 providers/alphacoders/       the fourth extension, same layout (29 tests)
-providers/wallpapersafari/   the fifth extension, same layout (24 tests)
+providers/wallpapersafari/   the fifth extension, same layout (26 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -394,12 +394,25 @@ page (~700 source lines plus 590 lines of tests):
   Both `+`- and `%20`-encoded multi-word queries serve identically
   (verified live — the encoding trap that wallpapers4k 1.0.0 shipped
   does not exist here).
-- **Category directories as streams.** The site's `/category/{slug}/`
-  pages are directories of the same gallery cards (168 for art), so the
-  host's `anime` filter walks `/category/art/anime/` three galleries per
-  page with served-id dedupe — the same stream machinery as search. The
-  site files no people category, so the host's `people` value honestly
-  lands on the default popular wall, documented rather than guessed.
+- **Category directories as streams — and the 1.0.1 tab lesson.** The
+  site's `/category/{slug}/` pages are directories of the same gallery
+  cards (168 for art). Only one of them is reachable through the host's
+  fixed category vocabulary (`general`/`anime`/`people`): the host's
+  `anime` filter walks `/category/art/anime/` three galleries per page
+  with served-id dedupe, the same stream machinery as search (the site
+  files no people category, so `people` honestly lands on the default
+  popular wall). 1.0.0 declared the other six shelves — Art, Animals,
+  Cars, Nature, Sports, Travel — as `category` values of their own,
+  which the host's section-to-query mapping silently drops (its
+  vocabulary is fixed); every one of those tabs collapsed to the
+  default popular wall and showed identical wallpapers. 1.0.1 moves
+  them onto the host's `query` presets — the mechanism every other
+  provider here already uses — so each tab routes through the
+  provider's real search and serves the site's own answer for its term
+  (57 galleries for *art*, 52 for *animals*, 60 each for *cars* and
+  *nature*, 50 for *sports*, 24 for *travel*, all verified live), and
+  a regression test now fails on any `category` value the host
+  vocabulary cannot translate.
 - **No fake feeds.** `/latest-uploads/` is an empty JavaScript shell —
   no server-rendered latest exists — and no random endpoint exists, so
   LATEST and RANDOM are deliberately not declared. The home wall is
@@ -413,18 +426,21 @@ page (~700 source lines plus 590 lines of tests):
   never crawling or enumerating. The `/ajax/` endpoints the site
   reserves for liking, rating and load-more are never called. Every
   other path this provider touches stays inside the allowances.
-- **Verified.** 24 unit tests from real captured markup (both grid
+- **Verified.** 26 unit tests from real captured markup (both grid
   shapes — home cells and post-image blocks with their sibling like
   widgets — reordered single-quoted attributes, debris-cell isolation,
   the gallery cards with their hit/miss headings, the two-step merge
   with batching, dedupe and skip-on-failure, the zero-result marker's
   trending defense, the deep cap, category streams and their served-id
   windows, the unmapped-category fallback, the detail record, URL
-  round-trips, tag suggestions, sections and capabilities) plus a gated
+  round-trips, tag suggestions, sections and capabilities, and the
+  host-vocabulary guard that keeps every section on a key the host can
+  translate) plus a gated
   `WallpaperSafariLiveCheckTest` (`WALLPAPERSAFARI_LIVE=1`): the home
   wall with true dimensions, real search matching one gallery whole,
   many-gallery search walking a fresh page two, the honest zero-result
-  miss, the anime category stream, definitive details, and the
+  miss, the anime category stream, the six category shelves each
+  serving its own distinct feed, definitive details, and the
   disclosed original really serving — all green against the live site.
 
 ## Publishing (CI)

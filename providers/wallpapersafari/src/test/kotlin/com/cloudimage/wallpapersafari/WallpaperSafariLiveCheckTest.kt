@@ -129,6 +129,33 @@ class WallpaperSafariLiveCheckTest {
             assertTrue("the directory is deep enough to offer more", page.nextPage != null)
         }
 
+    /**
+     * The six category shelves as the host loads them: each rides the
+     * `query` key, so its row routes through [WallpaperSafariWallpaperProvider.search]
+     * with the term as text — one search plus its first gallery batch per
+     * tab, exactly what one user tapping through the six tabs produces.
+     * The 1.0.0 bug this pins: the shelves rode `category` values the
+     * host vocabulary drops, so every tab served the same popular wall.
+     */
+    @Test
+    fun `each category shelf serves its own distinct feed`() =
+        runTest {
+            assumeTrue(live())
+            val configured = configured()
+
+            val firstIdsByTerm =
+                listOf("art", "animals", "cars", "nature", "sports", "travel").associateWith { term ->
+                    val page = configured.search(query = term, page = 1).getOrThrow()
+                    assertTrue("the '$term' shelf must serve its own feed, got ${page.wallpapers.size} items", page.wallpapers.isNotEmpty())
+                    page.wallpapers.first().id
+                }
+
+            assertTrue(
+                "expected six distinct shelves, got overlaps: $firstIdsByTerm",
+                firstIdsByTerm.values.toSet().size >= 4,
+            )
+        }
+
     @Test
     fun `details reads the definitive live record`() =
         runTest {

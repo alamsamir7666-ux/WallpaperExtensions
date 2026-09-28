@@ -581,7 +581,7 @@ class WallpaperSafariWallpaperProviderTest {
     // ------------------------------------------------------------ sections
 
     @Test
-    fun `sections offer the home wall, category presets and query presets`() =
+    fun `sections offer the home wall, the anime directory and query presets`() =
         runTest {
             val sections = provider.sections()
 
@@ -589,6 +589,52 @@ class WallpaperSafariWallpaperProviderTest {
             assertEquals("popular", sections.first().id)
             assertTrue(sections.any { it.id == "anime" && it.filters.isSelected("category", "anime") })
             assertTrue(sections.any { it.id == "girls" && it.filters.isSelected("query", "girls") })
+        }
+
+    @Test
+    fun `no section speaks a category value the host vocabulary cannot translate`() =
+        runTest {
+            // The host's section-to-query mapping recognizes only
+            // general/anime/people under `category`; any other value is
+            // dropped, the section's query collapses to the blank
+            // default, and the tab shows the popular wall — exactly the
+            // 1.0.0 bug where Art, Animals, Cars, Nature, Sports and
+            // Travel all showed the same wallpapers. Custom shelves must
+            // ride the `query` key instead.
+            val speakable = setOf("general", "anime", "people")
+
+            provider.sections().forEach { section ->
+                section.filters.valuesFor("category").forEach { value ->
+                    assertTrue(
+                        "section '${section.id}' declares category '$value', which the host silently drops",
+                        value in speakable,
+                    )
+                }
+            }
+        }
+
+    @Test
+    fun `the six category shelves ride distinct query presets`() =
+        runTest {
+            val sections = provider.sections()
+
+            val terms =
+                sections
+                    .filter { it.id !in setOf("popular", "anime", "girls", "games", "movies") }
+                    .map { section ->
+                        assertTrue(
+                            "section '${section.id}' must ride the query key",
+                            section.filters.valuesFor("query").isNotEmpty(),
+                        )
+                        section.filters.valuesFor("query").first()
+                    }
+            assertEquals(
+                listOf("art", "animals", "cars", "nature", "sports", "travel"),
+                terms,
+            )
+            // Distinct terms, distinct tabs: no two shelves may collapse
+            // onto the same feed.
+            assertEquals(terms.size, terms.toSet().size)
         }
 
     @Test

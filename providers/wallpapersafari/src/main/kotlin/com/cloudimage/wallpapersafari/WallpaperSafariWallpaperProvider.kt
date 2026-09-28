@@ -43,11 +43,12 @@ import java.net.URLEncoder
  * ## How the contract maps onto it
  *
  * - [popular] rides the home wall by default — the exact feed the site's
- *   own front page shows, complete, one honest page. A recognized
- *   `category` value walks that category's gallery directory instead,
- *   three galleries per page — the same stream machinery as search.
- *   `anime` maps to the site's own anime category; the site files no
- *   people category, so `people` honestly lands on the default wall.
+ *   own front page shows, complete, one honest page. The `anime`
+ *   `category` value — the one directory the host's fixed category
+ *   vocabulary (`general`/`anime`/`people`) can express — walks the
+ *   site's anime gallery directory instead, three galleries per page,
+ *   the same stream machinery as search. The site files no people
+ *   category, so `people` honestly lands on the default wall.
  * - [search] is the site's real search endpoint, the CloudStream
  *   two-step: the query's gallery cards first, then the batch's topic
  *   pages fetched one by one and merged — three galleries per app page,
@@ -55,10 +56,19 @@ import java.net.URLEncoder
  *   short-circuits to an honest empty page. One query matching a single
  *   gallery serves that gallery whole, which is exactly what the website
  *   itself shows.
- * - [sections] offers eleven shelves: the home wall, seven category
- *   presets (Anime, Art, Animals, Cars, Nature, Sports, Travel), and
- *   three query presets (Girls, Games, Movies) that ride [search] — the
- *   site's own answer for those terms.
+ * - [sections] offers eleven shelves: the home wall, Anime, six more
+ *   category shelves (Art, Animals, Cars, Nature, Sports, Travel) and
+ *   three more query presets (Girls, Games, Movies). Every shelf
+ *   except `popular` and `anime` rides the `query` key, whose rows the
+ *   host routes through [search] with the term as text — the site's
+ *   own answer for that word. Anime is the one shelf that can ride
+ *   the host's `category` vocabulary, so it walks the site's curated
+ *   anime directory instead. (v1.0.0 declared the six category
+ *   shelves as `category` -> `art`/`animals`/... — values outside the
+ *   host's fixed vocabulary, dropped in translation, so every one of
+ *   those tabs collapsed to the default popular wall; v1.0.1 moves
+ *   them onto the `query` key, the same preset pattern every other
+ *   provider in this repository already uses.)
  * - [details] fetches `/w/{id}` and reads the definitive record: the
  *   H1 title, the main image (the full-resolution file with its TRUE
  *   dimensions), the uploader, and the gallery the wallpaper belongs to.
@@ -97,7 +107,7 @@ class WallpaperSafariWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperSafari",
-            versionName = "1.0.0",
+            versionName = "1.0.1",
             author = "Cloudimage",
             description = "Desktop and phone wallpapers from wallpapersafari.com - scraped, keyless.",
             // The site curates its galleries and carries no per-item rating
@@ -118,12 +128,13 @@ class WallpaperSafariWallpaperProvider : WallpaperProvider {
 
     /**
      * The default feed is the home wall — the site's own "Popular
-     * wallpapers", fifty complete items, honestly one page. A recognized
-     * `category` value walks that category's gallery directory instead,
-     * the same three-galleries-per-page stream as search. The site files
-     * no people category of its own, so `people` lands on the default
-     * wall — the honest nearest expression, documented rather than
-     * guessed.
+     * wallpapers", fifty complete items, honestly one page. The `anime`
+     * `category` value — the one directory the host's fixed vocabulary
+     * can express — walks the site's anime gallery directory instead,
+     * the same three-galleries-per-page stream as search. The site
+     * files no people category of its own, so `people` lands on the
+     * default wall — the honest nearest expression, documented rather
+     * than guessed.
      */
     override suspend fun popular(
         page: Int,
@@ -195,23 +206,34 @@ class WallpaperSafariWallpaperProvider : WallpaperProvider {
         }
 
     /**
-     * The site's shelves as tabs: the home wall first, then the category
-     * presets in bar order, then the query presets. Anime rides the
-     * host's own `category` vocabulary; every category shelf rides the
-     * category filter; the query presets ride [search], where the site's
-     * own answer for those terms is served. Cheap and offline, as the
-     * contract asks.
+     * The site's shelves as tabs: the home wall first, then the six
+     * category shelves, then the remaining query presets. Every shelf
+     * except `popular` and `anime` rides the `query` key, whose rows
+     * the host routes through [search] with the term as text — the
+     * site's own answer for that word, all six verified live (57
+     * galleries for `art`, 52 for `animals`, 60 each for `cars` and
+     * `nature`, 50 for `sports`, 24 for `travel`). `anime` rides the
+     * host's own `category` vocabulary — the one value that
+     * vocabulary speaks besides `general`/`people` — so the Anime tab
+     * walks the site's curated `/category/art/anime/` directory
+     * instead of a search. Cheap and offline, as the contract asks.
+     *
+     * The v1.0.1 lesson this shape carries: a `category` value the
+     * host vocabulary cannot translate is dropped by the host's
+     * section-to-query mapping, and the section silently collapses to
+     * the default popular wall — six identical tabs in 1.0.0. Custom
+     * shelves ride `query`, always.
      */
     override suspend fun sections(): List<HomeSection> =
         listOf(
             HomeSection(id = "popular", title = "Popular"),
             HomeSection(id = "anime", title = "Anime", filters = Filters.of("category" to "anime")),
-            HomeSection(id = "art", title = "Art", filters = Filters.of("category" to "art")),
-            HomeSection(id = "animals", title = "Animals", filters = Filters.of("category" to "animals")),
-            HomeSection(id = "cars", title = "Cars", filters = Filters.of("category" to "cars")),
-            HomeSection(id = "nature", title = "Nature", filters = Filters.of("category" to "nature")),
-            HomeSection(id = "sports", title = "Sports", filters = Filters.of("category" to "sports")),
-            HomeSection(id = "travel", title = "Travel", filters = Filters.of("category" to "travel")),
+            HomeSection(id = "art", title = "Art", filters = Filters.of("query" to "art")),
+            HomeSection(id = "animals", title = "Animals", filters = Filters.of("query" to "animals")),
+            HomeSection(id = "cars", title = "Cars", filters = Filters.of("query" to "cars")),
+            HomeSection(id = "nature", title = "Nature", filters = Filters.of("query" to "nature")),
+            HomeSection(id = "sports", title = "Sports", filters = Filters.of("query" to "sports")),
+            HomeSection(id = "travel", title = "Travel", filters = Filters.of("query" to "travel")),
             HomeSection(id = "girls", title = "Girls", filters = Filters.of("query" to "girls")),
             HomeSection(id = "games", title = "Games", filters = Filters.of("query" to "games")),
             HomeSection(id = "movies", title = "Movies", filters = Filters.of("query" to "movies")),
@@ -521,10 +543,7 @@ class WallpaperSafariWallpaperProvider : WallpaperProvider {
 
     /**
      * One browse shelf's category: the term its section carries and the
-     * site's own directory path behind it (every path verified live).
-     * Only `anime` rides the host's `category` vocabulary — the site
-     * files no people category, so no `people` mapping exists and the
-     * value honestly falls back to the default wall.
+     * site's own directory path behind it (verified live).
      */
     private data class CategorySpec(
         val term: String,
@@ -541,21 +560,18 @@ class WallpaperSafariWallpaperProvider : WallpaperProvider {
         const val BASE_URL = "https://wallpapersafari.com"
 
         /**
-         * The categories this provider can express, keyed by the host
-         * vocabulary's own term where one applies. `art` is the site's
-         * umbrella (its anime lives under it); the rest are the site's
-         * own top-level directories, all serving the same gallery-card
-         * shape.
+         * The category directories this provider can walk, keyed by the
+         * host vocabulary's own terms. Only `anime` is reachable from
+         * the host — its `category` vocabulary speaks just
+         * `general`/`anime`/`people` (v1.0.1 dropped the art/animals/
+         * cars/nature/sports/travel entries 1.0.0 carried: unreachable
+         * through every host path, they only pretended the six
+         * category tabs worked). The site files no people category,
+         * so `people` honestly falls back to the default wall.
          */
         val categoryByTerm =
             mapOf(
                 "anime" to CategorySpec("anime", "/category/art/anime/"),
-                "art" to CategorySpec("art", "/category/art/"),
-                "animals" to CategorySpec("animals", "/category/animals/"),
-                "cars" to CategorySpec("cars", "/category/cars/"),
-                "nature" to CategorySpec("nature", "/category/nature/"),
-                "sports" to CategorySpec("sports", "/category/sports/"),
-                "travel" to CategorySpec("travel", "/category/travel/"),
             )
 
         /** Search batching: three galleries per page, ten pages deep at most. */
