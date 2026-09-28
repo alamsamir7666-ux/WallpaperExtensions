@@ -4,7 +4,7 @@ import com.cloudimage.provider.api.Filters
 import com.cloudimage.provider.api.ProviderHttpClient
 import com.cloudimage.provider.api.ProviderHttpResponse
 import com.cloudimage.provider.api.ProviderSettings
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -24,7 +24,12 @@ import java.net.URL
  *
  * The assumption skips every test here unless that variable is set — CI and
  * plain `check` never touch the network. Requests are sequential and few,
- * exactly what one user browsing the app produces.
+ * exactly what one user browsing the app produces. Unlike the unit tests,
+ * these run under `runBlocking`, not `runTest`: the provider's pace gate
+ * sleeps with `delay`, and virtual time would skip those sleeps — turning
+ * the harness itself into the very burst the gate exists to prevent (the
+ * first draft ran under `runTest` and the site answered the burst with
+ * 403s, a live confirmation of the whole 1.5.0 thesis).
  */
 class WallpaperAccessLiveCheckTest {
     private val provider = WallpaperAccessWallpaperProvider()
@@ -68,7 +73,7 @@ class WallpaperAccessLiveCheckTest {
 
     @Test
     fun `popular feed answers with a real single-page batch`() =
-        runTest {
+        runBlocking {
             assumeTrue(live())
             val page = configured().popular(page = 1).getOrThrow()
 
@@ -90,7 +95,7 @@ class WallpaperAccessLiveCheckTest {
 
     @Test
     fun `data-or dimensions equal the served file's own pixels`() =
-        runTest {
+        runBlocking {
             assumeTrue(live())
             val first =
                 configured()
@@ -104,7 +109,7 @@ class WallpaperAccessLiveCheckTest {
             assertTrue("original answered HTTP ${response.statusCode}", response.isSuccessful)
             val sniffed = sniffDimensions(response.body)
             assertNotNull("original should be a JPEG or PNG", sniffed)
-            if (sniffed == null) return@runTest
+            if (sniffed == null) return@runBlocking
             val (width, height) = sniffed
             assertEquals(
                 "data-or must equal the file's true width (the card-crop regression, inverted)",
@@ -120,7 +125,7 @@ class WallpaperAccessLiveCheckTest {
 
     @Test
     fun `the thumb really is the lighter preview of the same file`() =
-        runTest {
+        runBlocking {
             assumeTrue(live())
             val first =
                 configured()
@@ -144,7 +149,7 @@ class WallpaperAccessLiveCheckTest {
 
     @Test
     fun `the fresh feed and the anime category walk their own listings`() =
-        runTest {
+        runBlocking {
             assumeTrue(live())
             val configured = configured()
             val fresh =
@@ -164,7 +169,7 @@ class WallpaperAccessLiveCheckTest {
 
     @Test
     fun `search slug-guesses a real collection and misses honestly`() =
-        runTest {
+        runBlocking {
             assumeTrue(live())
             val configured = configured()
             val hit = configured.search(query = "naruto", page = 1).getOrThrow()
@@ -179,7 +184,7 @@ class WallpaperAccessLiveCheckTest {
 
     @Test
     fun `details re-walks the listing and answers the true record`() =
-        runTest {
+        runBlocking {
             assumeTrue(live())
             val configured = configured()
             val first =
@@ -205,7 +210,7 @@ class WallpaperAccessLiveCheckTest {
 
     @Test
     fun `a portrait item keeps its portrait shape from listing to details`() =
-        runTest {
+        runBlocking {
             assumeTrue(live())
             val configured = configured()
             // Phone-first crops live in the phone-wallpaper collections;
@@ -220,7 +225,7 @@ class WallpaperAccessLiveCheckTest {
             // Not an assertion about the site — just skip when the first
             // batch happens to be all-landscape.
             assumeTrue("no portrait item in this batch", portrait != null)
-            if (portrait == null) return@runTest
+            if (portrait == null) return@runBlocking
             val details = configured.details(portrait.id).getOrThrow()
             assertEquals(portrait.height, details.wallpaper.height)
             assertTrue(
