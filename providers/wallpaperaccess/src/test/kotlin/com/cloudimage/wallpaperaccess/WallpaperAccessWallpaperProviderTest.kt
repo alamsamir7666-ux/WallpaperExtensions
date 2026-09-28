@@ -7,6 +7,7 @@ import com.cloudimage.provider.api.ProviderHttpResponse
 import com.cloudimage.provider.api.ProviderSettings
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,14 +16,16 @@ import org.junit.Test
  * WallpaperAccess provider over a scripted fake of the plugin-facing HTTP
  * facade, with fixtures cut from the live site's markup: the shared
  * data-attribute listing grid (popular, fresh, collections, slug-guessed
- * search), the related-band endless walk with its warm and cold caches,
- * the robots-compliant slug-guess search with its 404-is-a-miss
- * contract, the detail record re-walked from the id's own listing, and
- * the host-vocabulary routing all stay covered without a network.
+ * search), the related-band walk the two ranked mixed feeds ride, the
+ * same-theme sitemap walk every themed root rides (the Nature tab stays
+ * nature — never the site's mixed Related band), the robots-compliant
+ * slug-guess search with its 404-is-a-miss contract, the detail record
+ * re-walked from the id's own listing, and the host-vocabulary routing
+ * all stay covered without a network.
  *
- * Walk tests drive FRESH provider instances — the related-band cache is
- * instance state, and a test must never depend on the cache another test
- * left behind.
+ * Walk tests drive FRESH provider instances — the walk caches are
+ * instance state, and a test must never depend on the caches another
+ * test left behind.
  */
 class WallpaperAccessWallpaperProviderTest {
     private val provider = WallpaperAccessWallpaperProvider()
@@ -171,6 +174,22 @@ class WallpaperAccessWallpaperProviderTest {
                 )
             }
             append("<h2 class=\"ui center aligned color_black _h2\">How to change your wallpaper</h2>")
+        }
+
+    /**
+     * The site's public sitemap — the real shape: one `<url>` per
+     * collection, the address in `<loc>`, a rolling window of the newest
+     * collections (the classic roots are not in it; their siblings are).
+     */
+    private fun sitemapXml(vararg slugs: String): String =
+        buildString {
+            append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+            append("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">")
+            slugs.forEach { slug ->
+                append("<url><loc>https://wallpaperaccess.com/$slug</loc>")
+                append("<lastmod>2026-09-26T22:28:01+00:00</lastmod></url>")
+            }
+            append("</urlset>")
         }
 
     /** A one-cell listing for a walked collection — the shared cell shape, its own ids. */
@@ -457,7 +476,10 @@ class WallpaperAccessWallpaperProviderTest {
             assertEquals("https://wallpaperaccess.com/fall", client.requests.single())
             assertEquals("fall/343386.jpg", page.wallpapers.single().id)
             assertEquals(listOf("fall"), page.wallpapers.single().tags)
-            assertNull("the fixture carries no related band", page.nextPage)
+            // A themed root's continuation is its sitemap siblings,
+            // resolved lazily on the first deeper page — the offer is
+            // optimistic whenever the batch itself is non-empty.
+            assertEquals(2, page.nextPage)
         }
 
     @Test
@@ -506,13 +528,17 @@ class WallpaperAccessWallpaperProviderTest {
         }
 
     @Test
-    fun `a search hit walks its own related band on deeper pages`() =
+    fun `a search hit walks its same-theme sitemap siblings`() =
         runTest {
             val (fresh, client) =
                 freshProvider(
+                    // Longer keys first: /fall is a prefix of /fall-leaves.
                     linkedMapOf(
-                        "https://wallpaperaccess.com/fall" to ok(fallGrid + relatedBand("flowers")),
-                        "https://wallpaperaccess.com/flowers" to ok(walkedGrid("flowers", "900001")),
+                        "https://wallpaperaccess.com/sitemap.xml" to
+                            ok(sitemapXml("fall-leaves", "waterfall", "space-opera", "fall-landscape")),
+                        "https://wallpaperaccess.com/fall-leaves" to ok(walkedGrid("fall-leaves", "900001")),
+                        "https://wallpaperaccess.com/fall-landscape" to ok(walkedGrid("fall-landscape", "900003")),
+                        "https://wallpaperaccess.com/fall" to ok(fallGrid + relatedBand("galaxy")),
                     ),
                 )
 
@@ -520,17 +546,139 @@ class WallpaperAccessWallpaperProviderTest {
             assertEquals(2, first.nextPage)
 
             val second = fresh.search(query = "fall", page = 2).getOrThrow()
+            assertEquals("fall-leaves/900001.jpg", second.wallpapers.single().id)
+            assertEquals("still one themed sibling left", 3, second.nextPage)
 
-            assertEquals("flowers/900001.jpg", second.wallpapers.single().id)
-            assertEquals(listOf("flowers"), second.wallpapers.single().tags)
-            assertNull("one card in the band, nothing after it", second.nextPage)
+            val third = fresh.search(query = "fall", page = 3).getOrThrow()
+            assertEquals("fall-landscape/900003.jpg", third.wallpapers.single().id)
+            assertNull("the theme's siblings are exhausted", third.nextPage)
+
+            // The band's off-theme card and the sitemap's off-theme
+            // entries (waterfall shares no token, space-opera is another
+            // theme) are never fetched.
+            assertTrue(
+                client.requests.none {
+                    it.endsWith("/galaxy") || it.endsWith("/waterfall") || it.endsWith("/space-opera")
+                },
+            )
+        }
+
+    @Test
+    fun `a themed tab never serves another theme's wallpapers`() =
+        runTest {
+            // The 1.1.0 regression, exactly as reported: the Nature tab's
+            // scroll drifted into space wallpapers through the site's
+            // mixed Related band. The themed walk must stay on theme.
+            val (fresh, client) =
+                freshProvider(
+                    // Longer keys first: /nature is a prefix of /nature-path.
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/sitemap.xml" to
+                            ok(sitemapXml("nature-path", "birds-in-nature", "galaxy", "space-opera", "technology", "car")),
+                        "https://wallpaperaccess.com/nature-path" to ok(walkedGrid("nature-path", "900011")),
+                        "https://wallpaperaccess.com/birds-in-nature" to ok(walkedGrid("birds-in-nature", "900012")),
+                        // The root's own band deals exactly the off-theme
+                        // cards the live nature page deals (galaxy,
+                        // technology, car, …) — never to be walked now.
+                        "https://wallpaperaccess.com/nature" to ok(fallGrid + relatedBand("galaxy", "technology", "car")),
+                    ),
+                )
+
+            val first = fresh.search(query = "nature", page = 1).getOrThrow()
+            assertEquals(2, first.nextPage)
+
+            val second = fresh.search(query = "nature", page = 2).getOrThrow()
+            assertEquals("nature-path/900011.jpg", second.wallpapers.single().id)
+            assertEquals(3, second.nextPage)
+
+            val third = fresh.search(query = "nature", page = 3).getOrThrow()
+            assertEquals("birds-in-nature/900012.jpg", third.wallpapers.single().id)
+            assertNull(third.nextPage)
+
+            // No off-theme collection is ever fetched, and the sitemap is
+            // read exactly once for the whole walk.
+            assertTrue(
+                client.requests.none {
+                    it.endsWith("/galaxy") ||
+                        it.endsWith("/space-opera") ||
+                        it.endsWith("/technology") ||
+                        it.endsWith("/car")
+                },
+            )
+            assertEquals(1, client.requests.count { it.endsWith("/sitemap.xml") })
+        }
+
+    @Test
+    fun `a theme the sitemap cannot serve resolves the optimistic offer honestly`() =
+        runTest {
+            val (fresh, _) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/sitemap.xml" to ok(sitemapXml("space-opera", "car")),
+                        "https://wallpaperaccess.com/minimal" to ok(fallGrid),
+                    ),
+                )
+
+            val first = fresh.search(query = "minimal", page = 1).getOrThrow()
+            assertEquals("the offer is optimistic", 2, first.nextPage)
+
+            val second = fresh.search(query = "minimal", page = 2).getOrThrow()
+
+            assertTrue("no minimal sibling in the window", second.wallpapers.isEmpty())
+            assertNull(second.nextPage)
+        }
+
+    @Test
+    fun `an unreadable sitemap ends the themed walk without an error`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/sitemap.xml" to ProviderHttpResponse(403, emptyMap(), ByteArray(0)),
+                        "https://wallpaperaccess.com/nature" to ok(fallGrid),
+                    ),
+                )
+
+            val first = fresh.search(query = "nature", page = 1).getOrThrow()
+            assertEquals(2, first.nextPage)
+
+            val second = fresh.search(query = "nature", page = 2).getOrThrow()
+
+            // A challenge page is zero siblings, never a crash — the
+            // feed ends where the site's readable surface ends.
+            assertTrue(second.wallpapers.isEmpty())
+            assertNull(second.nextPage)
             assertEquals(
                 listOf(
-                    "https://wallpaperaccess.com/fall",
-                    "https://wallpaperaccess.com/flowers",
+                    "https://wallpaperaccess.com/nature",
+                    "https://wallpaperaccess.com/sitemap.xml",
                 ),
                 client.requests,
             )
+        }
+
+    @Test
+    fun `the sitemap is read once across many tabs`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    // Longer keys first: /nature and /space are prefixes.
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/sitemap.xml" to ok(sitemapXml("nature-path", "space-opera")),
+                        "https://wallpaperaccess.com/nature-path" to ok(walkedGrid("nature-path", "900011")),
+                        "https://wallpaperaccess.com/space-opera" to ok(walkedGrid("space-opera", "900021")),
+                        "https://wallpaperaccess.com/nature" to ok(fallGrid),
+                        "https://wallpaperaccess.com/space" to ok(fallGrid),
+                    ),
+                )
+
+            fresh.search(query = "nature", page = 1).getOrThrow()
+            fresh.search(query = "nature", page = 2).getOrThrow()
+            fresh.search(query = "space", page = 1).getOrThrow()
+            fresh.search(query = "space", page = 2).getOrThrow()
+
+            // One sitemap read serves every tab's walk for the session.
+            assertEquals(1, client.requests.count { it.endsWith("/sitemap.xml") })
         }
 
     @Test
@@ -815,5 +963,59 @@ class WallpaperAccessWallpaperProviderTest {
         assertEquals("4k-gaming", WallpaperAccessParser.slugify("4K GAMING!!"))
         assertEquals("naruto", WallpaperAccessParser.slugify("Naruto"))
         assertEquals("", WallpaperAccessParser.slugify("!!! ..."))
+    }
+
+    @Test
+    fun `the sitemap keeps only single-segment collection addresses`() {
+        val xml =
+            sitemapXml(
+                "fall",
+                "fall", // duplicates keep their first position
+                "about", // a page of the site, never a collection
+                "nature-path",
+                "most-popular/iphone", // multi-segment: not a collection address
+                "sitemap.xml", // the sitemap itself
+            )
+
+        assertEquals(
+            listOf("fall", "nature-path"),
+            WallpaperAccessParser.parseSitemap(xml),
+        )
+    }
+
+    @Test
+    fun `a challenge page or empty body parses to zero sitemap slugs`() {
+        assertTrue(WallpaperAccessParser.parseSitemap("<!DOCTYPE html><html>Attention Required!</html>").isEmpty())
+        assertTrue(WallpaperAccessParser.parseSitemap("").isEmpty())
+    }
+
+    @Test
+    fun `theme tokens strip the generic vocabulary`() {
+        assertEquals(listOf("gaming"), WallpaperAccessParser.themeTokensOf("4k-gaming"))
+        assertEquals(listOf("nature"), WallpaperAccessParser.themeTokensOf("nature"))
+        assertEquals(listOf("fall", "leaves"), WallpaperAccessParser.themeTokensOf("the-fall-leaves-art"))
+        // Words that name nothing a collection is about.
+        assertEquals(emptyList<String>(), WallpaperAccessParser.themeTokensOf("4k-wallpapers"))
+        assertEquals(emptyList<String>(), WallpaperAccessParser.themeTokensOf("1920x1080"))
+        assertEquals(emptyList<String>(), WallpaperAccessParser.themeTokensOf("dual-monitor"))
+    }
+
+    @Test
+    fun `theme matching rides token boundaries, never substrings`() {
+        val fall = listOf("fall")
+        assertTrue(WallpaperAccessParser.matchesTheme("fall-leaves", fall))
+        assertTrue(WallpaperAccessParser.matchesTheme("autumn-fall", fall))
+        assertFalse("waterfall shares no token boundary", WallpaperAccessParser.matchesTheme("waterfall", fall))
+        assertFalse(WallpaperAccessParser.matchesTheme("galaxy", fall))
+
+        // Plural flex, both directions.
+        val movie = listOf("movie")
+        assertTrue(WallpaperAccessParser.matchesTheme("movies", movie))
+        assertTrue(WallpaperAccessParser.matchesTheme("the-movie-poster", movie))
+        val cars = listOf("cars")
+        assertTrue("the singular rides too", WallpaperAccessParser.matchesTheme("teal-car", cars))
+        assertFalse("cardiff shares no token boundary", WallpaperAccessParser.matchesTheme("cardiff-city", cars))
+
+        assertFalse(WallpaperAccessParser.matchesTheme("anything", emptyList()))
     }
 }

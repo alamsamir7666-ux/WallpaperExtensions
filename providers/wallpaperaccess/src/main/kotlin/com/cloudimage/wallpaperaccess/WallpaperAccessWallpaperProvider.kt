@@ -33,11 +33,19 @@ import com.cloudimage.provider.api.WallpaperProvider
  * adds `data-slug` (the owning collection) and an `alt` titled
  * `WxH Title`. The same filename under `/thumb/` is the site's lighter
  * 600-pixel preview, fifteen-for-fifteen across six listings live. There
- * is no pagination anywhere — `?page=2` serves the identical page — but
- * every listing page ends with a Related Wallpapers band of sibling
- * collections, the site's own "keep browsing" recommendations, and the
- * endless scroll rides that band. Unknown collection addresses answer a
- * clean 404.
+ * is no pagination anywhere — `?page=2` serves the identical page — so a
+ * listing's batch IS its whole inventory, and the endless scroll
+ * continues through OTHER collections, in one of two honest ways:
+ * themed roots (the tab presets, the host categories, search hits) walk
+ * the SAME-THEME sibling collections the site's own public sitemap
+ * enumerates, while the two ranked feeds — cross-theme by nature — ride
+ * the Related Wallpapers band every listing ends with, the site's own
+ * "keep browsing" recommendations for exactly that browsing mood. A
+ * themed root never rides that band: its cards are whatever the site
+ * cares to recommend (the live nature band runs ocean, summer, spring,
+ * easter, GALAXY, technology, windows, car, winter-nature), which is how
+ * a Nature tab would come to serve space wallpapers mid-scroll. Unknown
+ * collection addresses answer a clean 404.
  *
  * ## How the contract maps onto it
  *
@@ -45,30 +53,32 @@ import com.cloudimage.provider.api.WallpaperProvider
  *   walks that collection (`anime`, `people` — both real collections on
  *   this site), `sorting=date` walks the fresh feed `/new`, and everything
  *   else lands on the popular ranking, the default feed the browse tab
- *   shows first. Every feed then continues through the site's own Related
- *   Wallpapers band: page one is the root listing's whole batch, page two
- *   is the band's first card's batch, page three the second's, and so on
- *   — the exact journey a browser user clicking through Related Wallpapers
- *   takes, one collection per scroll, until the band runs out and the
- *   grid ends the same way the site's own pages do.
+ *   shows first. The two ranked feeds then continue through the site's
+ *   own Related Wallpapers band — mixed-theme by design, honest there;
+ *   a themed category continues through its same-theme siblings from
+ *   the sitemap instead, one collection per scroll, until the theme
+ *   runs out and the grid ends the same way the site's own pages do.
  * - [search] never touches the site's `/search` — its robots.txt excludes
  *   it. Instead the query is slugified into the site's own collection
  *   address shape and walked: `naruto` → `/naruto`, `4K Gaming!` →
  *   `/4k-gaming` (both verified live). An exact collection hit serves its
- *   whole batch, then walks that collection's own related band — the
- *   "more like this" the site itself recommends. An unknown address
- *   answers 404, which this provider reports as an honest empty results
- *   page — a miss, not a failure, seeding no walk. A blank query (the
- *   contract's escape hatch) lands on the popular feed, the same default
- *   the blank popular feed would show, and walks its band from there.
+ *   whole batch, then walks the same-theme siblings of that query —
+ *   `naruto` walks the sitemap's naruto collections, `nature` its nature
+ *   ones — the "more like this" the site's own catalog holds. An unknown
+ *   address answers 404, which this provider reports as an honest empty
+ *   results page — a miss, not a failure, seeding no walk. A blank query
+ *   (the contract's escape hatch) lands on the popular feed, the same
+ *   default the blank popular feed would show, and rides its band from
+ *   there.
  * - [sections] offers sixteen shelves: Popular, Latest (the host
  *   `sorting=date` preset over `/new`), Anime and People (the host
  *   `category` vocabulary), and twelve tag-style `query` presets —
  *   Nature, Space, Abstract, Cars, Games, Movies, Animals, Fantasy,
  *   Music, Dark, Minimal, City — each naming a real collection the
  *   slug-guess search addresses exactly (all verified live, twenty-seven
- *   to a hundred and four items each), and each walking its own related
- *   band as the scroll deepens.
+ *   to a hundred and four items each), and each walking its own
+ *   same-theme siblings as the scroll deepens: the Nature tab stays
+ *   nature, the Space tab stays space.
  * - [details] re-walks the listing the item came from — the id IS that
  *   pair, `collection/fileName` — and answers the cell's own record: the
  *   original URL, the TRUE dimensions from `data-or`, the alt-derived
@@ -87,12 +97,15 @@ import com.cloudimage.provider.api.WallpaperProvider
  * provider touches neither: originals are read from the cell's own
  * `data-fullimg` attribute, search rides collection pages at their public
  * slug addresses, the same links the site's own navigation serves every
- * visitor. Page one of a feed costs one request returning the whole
- * batch — a browser tab on the same page costs the same; each deeper page
- * costs one or two (the walked card, plus the root band when this
- * instance has not yet seen it) — a browser user clicking the site's own
- * Related cards spends the same. Fetches happen only on explicit user
- * actions, and the walk never revisits a card it has already served.
+ * visitor. The sitemap is read once per provider instance — the one
+ * surface the site publishes precisely for automated readers, a single
+ * request no matter how many tabs the session scrolls. Page one of a
+ * feed costs one request returning the whole batch — a browser tab on
+ * the same page costs the same; each deeper page costs one or two (the
+ * walked collection, plus the root band or sitemap when this instance
+ * has not yet seen it) — a browser user clicking through the site's own
+ * links spends the same. Fetches happen only on explicit user actions,
+ * and the walk never revisits a collection it has already served.
  * Preview and original image URLs are fetched
  * only by the app's image pipeline when it renders or downloads an item,
  * exactly as the site's own markup directs every browser. The site serves
@@ -104,10 +117,11 @@ import com.cloudimage.provider.api.WallpaperProvider
  *
  * The contract asks plugins to be stateless; the only mutable state is
  * optional caches that never gate correctness — the collection-name pool
- * feeding [suggestTags] and the related-band cache feeding the walk. A
- * fresh instance answers identically, at worst re-fetching a root band it
+ * feeding [suggestTags], the related-band cache feeding the ranked
+ * walks, and the sitemap cache feeding the theme walks. A fresh instance
+ * answers identically, at worst re-fetching a root band or the sitemap it
  * has not seen (one extra request, self-healing) or without suggestions.
- * Both caches are guarded by one lock; sections load in parallel on the
+ * All caches are guarded by one lock; sections load in parallel on the
  * host side.
  *
  * ## Dimensions
@@ -126,7 +140,7 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperAccess",
-            versionName = "1.1.0",
+            versionName = "1.2.0",
             author = "Cloudimage",
             description = "HD, 4K and up wallpapers from wallpaperaccess.com - scraped, keyless.",
             // The site curates its collections and carries no per-item
@@ -149,10 +163,10 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
      * The default feed, ridden through the host vocabulary: a recognized
      * `category` walks that collection's page, `sorting=date` walks the
      * fresh feed, and everything else lands on the popular ranking.
-     * Whatever the root, deeper pages walk its Related Wallpapers band —
-     * the site's own "keep browsing" recommendations, one collection per
-     * page. Category wins over sorting: it is the primary axis of the
-     * site's content.
+     * The two ranked feeds continue through the site's Related Wallpapers
+     * band (mixed-theme, honest for a mixed feed); a themed category
+     * continues through its same-theme sitemap siblings. Category wins
+     * over sorting: it is the primary axis of the site's content.
      */
     override suspend fun popular(
         page: Int,
@@ -174,10 +188,9 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
      * answers 404, which is a miss, not a failure: the honest answer is
      * an empty results page, exactly what the site's own no-results
      * moment looks like, and no walk is seeded from it. A hit serves its
-     * whole batch, then walks that collection's own related band on
-     * deeper pages. A blank query (the contract's escape hatch) lands on
-     * the popular feed, the same default the blank popular feed would
-     * show.
+     * whole batch, then walks the query's same-theme siblings on deeper
+     * pages. A blank query (the contract's escape hatch) lands on the
+     * popular feed, the same default the blank popular feed would show.
      */
     override suspend fun search(
         query: String,
@@ -295,14 +308,17 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
     // ---------------------------------------------------------------- feed
 
     /**
-     * Any listing feed, walked page by page through the site's own
-     * Related Wallpapers band. Page one is the root listing's whole
-     * batch — the site paginates nothing, one page IS the collection's
-     * entire inventory. Deeper pages walk the root's related band, one
-     * recommended collection per page in the site's own order: page two
-     * serves the first card's batch, page three the second's, and so on
-     * until the band runs out, where the feed ends with `nextPage` null.
-     * A card the site no longer serves (404) is skipped gracefully — an
+     * Any listing feed, walked page by page. Page one is the root
+     * listing's whole batch — the site paginates nothing, one page IS
+     * the collection's entire inventory. Deeper pages continue through
+     * other collections, chosen the honest way for each root: the two
+     * ranked feeds (`most-popular`, `new`) are cross-theme by nature, so
+     * they ride the root's Related Wallpapers band — the site's own
+     * mixed "keep browsing" recommendations, one per page in the site's
+     * own order; every themed root (tab presets, host categories, search
+     * hits) walks its SAME-THEME siblings from the site's public sitemap
+     * — the Nature tab stays nature, the Space tab stays space. A walked
+     * collection that no longer answers 404 is skipped gracefully — an
      * empty page whose `nextPage` keeps the walk alive, which the host's
      * merged feed already understands. The walked collection's own slug
      * rides in every item's id, so [details] re-walks the listing the
@@ -314,16 +330,38 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         rootNotFoundIsMiss: Boolean = false,
     ): Page {
         if (page < 1) return Page(emptyList(), nextPage = null)
+        val ranked = rootSlug in RANKED_SLUGS
         if (page == 1) {
             val response = get("$BASE_URL/$rootSlug")
             return when {
                 response.isSuccessful -> {
                     val html = response.bodyText
-                    val related = rememberRelated(rootSlug, html)
-                    Page(
-                        gridWallpapers(html, rootSlug),
-                        nextPage = if (related.isEmpty()) null else 2,
-                    )
+                    val batch = gridWallpapers(html, rootSlug)
+                    when {
+                        // A ranked feed's band is its own recommendation
+                        // of what to browse next — an honest continuation
+                        // for a mixed feed, and the walk only starts when
+                        // the site actually offers one.
+                        ranked ->
+                            Page(
+                                batch,
+                                nextPage =
+                                    if (rememberRelated(rootSlug, html).isEmpty()) null else 2,
+                            )
+                        // A themed root's continuation is its same-theme
+                        // siblings; the sitemap is read lazily on the
+                        // first deeper page, so opening a tab costs exactly
+                        // one request. The optimistic `nextPage` is
+                        // resolved there: a theme with no siblings (or an
+                        // unreadable sitemap) ends the feed with an honest
+                        // empty page, and a root batch of zero cells has
+                        // nothing to continue from at all.
+                        else ->
+                            Page(
+                                batch,
+                                nextPage = if (batch.isEmpty()) null else 2,
+                            )
+                    }
                 }
                 // A search address that does not exist is a miss; a broken
                 // default feed is a source error. The caller picks.
@@ -331,11 +369,11 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
                 else -> throw httpError(response.statusCode)
             }
         }
-        val related = relatedListOf(rootSlug)
+        val walk = if (ranked) relatedListOf(rootSlug) else siblingListOf(rootSlug)
         val index = page - 2
-        if (index >= related.size) return Page(emptyList(), nextPage = null)
-        val target = related[index]
-        val more = index + 1 < related.size
+        if (index >= walk.size) return Page(emptyList(), nextPage = null)
+        val target = walk[index]
+        val more = index + 1 < walk.size
         val response = get("$BASE_URL/$target")
         return when {
             response.isSuccessful ->
@@ -343,7 +381,7 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
                     gridWallpapers(response.bodyText, target),
                     nextPage = if (more) page + 1 else null,
                 )
-            // The site's own card points at a page it no longer serves —
+            // The site's own link points at a page it no longer serves —
             // skip it and let the next page continue the walk.
             response.statusCode == 404 -> Page(emptyList(), nextPage = if (more) page + 1 else null)
             else -> throw httpError(response.statusCode)
@@ -365,6 +403,55 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         if (response.statusCode == 404) return emptyList()
         if (!response.isSuccessful) throw httpError(response.statusCode)
         return rememberRelated(rootSlug, response.bodyText)
+    }
+
+    /**
+     * A themed root's same-theme siblings, from the site's public
+     * sitemap — the one surface where the site enumerates its collections
+     * in bulk, read once per provider instance and filtered to the
+     * addresses whose tokens name the root's own theme: `nature` walks
+     * `nature-path`, `birds-in-nature`, `beautiful-nature-scenery`, …;
+     * `space` walks `space-opera`, `space-jellyfish`, … — never the
+     * mixed-theme cards a Related band would deal. A root whose address
+     * names no theme word (`4k`, `wallpaper`, digits only) cannot walk
+     * honestly, and its feed ends after its batch. The sitemap's
+     * contents are the site's choice, not a promise: a challenge or a
+     * failure reads as zero siblings and the feed ends the same honest
+     * way — never an error over an auxiliary surface.
+     */
+    private suspend fun siblingListOf(rootSlug: String): List<String> {
+        synchronized(lock) { siblingCache[rootSlug] }?.let { return it }
+        val tokens = WallpaperAccessParser.themeTokensOf(rootSlug)
+        if (tokens.isEmpty()) return emptyList()
+        val siblings =
+            sitemapSlugs()
+                .filter { it != rootSlug && WallpaperAccessParser.matchesTheme(it, tokens) }
+        synchronized(lock) {
+            if (siblingCache.size < RELATED_CACHE_LIMIT) siblingCache[rootSlug] = siblings
+        }
+        return siblings
+    }
+
+    /**
+     * The sitemap's collection addresses — fetched once per instance,
+     * cached only on a successful read (a transient failure must not
+     * poison the whole session; the next deeper page simply retries).
+     * The sitemap is the site's own publication surface for automated
+     * readers; one request per session, no matter how many tabs scroll.
+     */
+    private suspend fun sitemapSlugs(): List<String> {
+        synchronized(lock) { sitemapCache }?.let { return it }
+        val response = get(SITEMAP_URL)
+        val slugs =
+            if (response.isSuccessful) {
+                WallpaperAccessParser.parseSitemap(response.bodyText)
+            } else {
+                emptyList()
+            }
+        if (response.isSuccessful) {
+            synchronized(lock) { sitemapCache = slugs }
+        }
+        return slugs
     }
 
     /**
@@ -455,6 +542,17 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         const val FRESH_SLUG = "new"
 
         /**
+         * The roots that are ranked MIXED feeds rather than themes — the
+         * only two listings whose deeper pages ride the Related Wallpapers
+         * band. Every other root is a themed collection and walks its
+         * same-theme sitemap siblings instead.
+         */
+        val RANKED_SLUGS = setOf(POPULAR_SLUG, FRESH_SLUG)
+
+        /** The site's public sitemap — its bulk enumeration of collections. */
+        const val SITEMAP_URL = "$BASE_URL/sitemap.xml"
+
+        /**
          * The host `category` vocabulary this provider can express: `anime`
          * and `people` are real collections on this site. `general` needs
          * no mapping: it is the default feed.
@@ -483,4 +581,10 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
 
     /** Root slug → its related band; guarded by [lock], capped, optional. */
     private val relatedCache = HashMap<String, List<String>>()
+
+    /** Themed root slug → its same-theme siblings; guarded by [lock], capped, optional. */
+    private val siblingCache = HashMap<String, List<String>>()
+
+    /** The sitemap's collection addresses, once per instance; guarded by [lock]. */
+    private var sitemapCache: List<String>? = null
 }

@@ -23,10 +23,14 @@ package com.cloudimage.wallpaperaccess
  * `/thumb/` is the site's lighter preview (verified live: a 1680x1050
  * original answers 600x400 there, fifteen-for-fifteen across six
  * listings). There is no pagination anywhere — `?page=2` serves the
- * identical page — but every listing page ends with a Related Wallpapers
- * band, the site's own recommendations of sibling collections; the
- * endless scroll rides that band, one recommended collection per deeper
- * page. Unknown collections answer a clean 404 whose title says
+ * identical page — so a listing's batch IS its whole inventory, and the
+ * endless scroll continues through OTHER collections: themed roots
+ * (the tab presets, the host categories, search hits) walk the
+ * same-theme siblings the site's own public sitemap enumerates, while
+ * the two ranked mixed feeds continue through the Related Wallpapers
+ * band every listing ends with — the site's own "keep browsing"
+ * recommendations, mixed-theme by design and honest there. Unknown
+ * collections answer a clean 404 whose title says
  * "Page not found".
  *
  * Readers below key on those markers rather than document order:
@@ -149,12 +153,15 @@ internal object WallpaperAccessParser {
      * to a sibling collection's slug address, and the band runs to the
      * how-to heading that follows it; live pages carry nine cards, though
      * the count is the site's choice, not a promise. This is the surface
-     * the endless scroll walks: a listing's own batch is the whole
-     * inventory (the site paginates nothing), so the feed continues into
-     * the collections the site itself recommends next — exactly the
-     * journey a browser user clicking through Related Wallpapers takes.
+     * the two RANKED mixed feeds (popular, fresh) ride on deeper pages:
+     * those feeds are cross-theme by nature, so the site's mixed
+     * recommendations are an honest continuation for them. Themed roots
+     * never touch this band — its cards name whatever the site cares to
+     * recommend (the live nature band runs ocean, summer, spring, easter,
+     * galaxy, technology, windows, car, winter-nature), which is exactly
+     * how a themed tab would come to serve off-theme wallpapers.
      *
-     * Pruning keeps the walk honest: the root's own slug drops (a
+     * Pruning keeps any walk honest: the root's own slug drops (a
      * self-link would repeat the batch), non-collection addresses drop
      * (`about`, `faq`, … — never seen live, but a stray nav anchor inside
      * the window must not poison the walk), and duplicates keep their
@@ -202,10 +209,11 @@ internal object WallpaperAccessParser {
 
     /**
      * Addresses that are pages of the site but never collections; a
-     * related band pointing at one (never seen live) would be skipped
-     * rather than walked. The ranked feeds (`most-popular`, `new`) are
-     * deliberately absent: they are real listings, and a related band
-     * recommending one is walked like any other card.
+     * related band or sitemap pointing at one (never seen live in the
+     * band) would be skipped rather than walked. The ranked feeds
+     * (`most-popular`, `new`) are deliberately absent: they are real
+     * listings, and a related band recommending one is walked like any
+     * other card.
      */
     private val NON_COLLECTION_SLUGS =
         setOf(
@@ -219,6 +227,145 @@ internal object WallpaperAccessParser {
             "full",
             "thumb",
             "search",
+            "sitemap",
+            "sitemap.xml",
+        )
+
+    // ------------------------------------------------------- the theme walk
+
+    /**
+     * The site's public sitemap — `/sitemap.xml`, a rolling window of
+     * the newest ~5000 collections (verified live: the classic roots
+     * — `nature`, `anime`, the ranked feeds — are NOT in it; their
+     * siblings are). This is the theme walk's sibling source, the one
+     * surface where the site enumerates collection addresses in bulk,
+     * published precisely for automated readers and fetched once per
+     * provider instance. Only the site's own collection shape survives:
+     * single-segment paths on this host, minus the non-collection
+     * addresses, deduped in served order. Bad input — a challenge page,
+     * a truncated body — parses to zero slugs and the themed feeds end
+     * honestly after their root batches.
+     */
+    fun parseSitemap(xml: String): List<String> =
+        SITEMAP_LOC
+            .findAll(xml)
+            .mapNotNull { match ->
+                match.groupValues[1]
+                    .substringBefore('?')
+                    .substringBefore('#')
+                    .trim('/')
+                    .takeIf { slug -> slug.isNotEmpty() && '/' !in slug && slug !in NON_COLLECTION_SLUGS }
+            }.toList()
+            .distinct()
+
+    /** A sitemap `<loc>` on this host: the path after it, up to the tag's end. */
+    private val SITEMAP_LOC = Regex("""<loc>\s*https://wallpaperaccess\.com/([^<]*)</loc>""")
+
+    /**
+     * The theme words a listing address names — the tokens that remain
+     * after the generic vocabulary drops: English stopwords, resolution
+     * and format words (`4k`, `hd`), device words (`phone`, `monitor`),
+     * the site's own nouns (`wallpaper`, `background`), and anything
+     * carrying a digit (overwhelmingly resolutions on this site).
+     * `4k-gaming` names `gaming`; `nature` names `nature`; `4k-wallpapers`
+     * names nothing — a query that cannot name a theme cannot walk one,
+     * and its feed ends after the root batch.
+     */
+    fun themeTokensOf(slug: String): List<String> =
+        slug
+            .split('-')
+            .filter { it.isNotEmpty() && it !in GENERIC_TOKENS && it.none(Char::isDigit) }
+            .distinct()
+
+    /**
+     * Whether a candidate collection belongs to the theme those tokens
+     * name — token-boundary equality, never substring: `fall` matches
+     * `fall-leaves` but never `waterfall`, `car` never `card`. Plural
+     * shapes flex both ways (`car`/`cars`, `movie`/`movies`) — the one
+     * English morphology this vocabulary needs.
+     */
+    fun matchesTheme(
+        candidateSlug: String,
+        tokens: List<String>,
+    ): Boolean {
+        if (tokens.isEmpty()) return false
+        val candidate = candidateSlug.split('-').toSet()
+        return tokens.any { token ->
+            token in candidate ||
+                "${token}s" in candidate ||
+                (token.length >= 4 && token.dropLast(1) in candidate)
+        }
+    }
+
+    /**
+     * Tokens that never name a theme — calibrated against the live
+     * sitemap's most common tokens. Colors stay OUT of this list:
+     * `dark`, `black`, `pink` name real themes this site's users browse
+     * by.
+     */
+    private val GENERIC_TOKENS =
+        setOf(
+            // English stopwords the site's slugs carry in volume.
+            "the",
+            "a",
+            "an",
+            "and",
+            "or",
+            "of",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "with",
+            "from",
+            "by",
+            "my",
+            "your",
+            // Resolution and format words.
+            "4k",
+            "5k",
+            "8k",
+            "10k",
+            "2k",
+            "hd",
+            "fullhd",
+            "uhd",
+            "qhd",
+            "wqhd",
+            "3d",
+            // What the site serves, not what a collection is about.
+            "wallpaper",
+            "wallpapers",
+            "background",
+            "backgrounds",
+            "image",
+            "images",
+            "pic",
+            "pics",
+            "photo",
+            "photos",
+            "art",
+            "logo",
+            // Devices and surfaces.
+            "phone",
+            "mobile",
+            "desktop",
+            "pc",
+            "computer",
+            "laptop",
+            "monitor",
+            "monitors",
+            "dual",
+            "screen",
+            "screens",
+            "amoled",
+            "iphone",
+            "android",
+            "lockscreen",
+            "lockscreens",
+            "home",
+            "homescreen",
         )
 
     /**

@@ -200,8 +200,8 @@ class WallpaperAccessLiveCheckTest {
 
             assertTrue("expected a real batch, got ${hit.wallpapers.size}", hit.wallpapers.size >= 20)
             assertTrue(hit.wallpapers.all { it.id.startsWith("naruto/") })
-            // A hit seeds its own related-band walk.
-            assertEquals("the hit's related band seeds the walk", 2, hit.nextPage)
+            // A hit optimistically offers its same-theme walk.
+            assertEquals("the hit's theme walk is offered", 2, hit.nextPage)
             // An unknown address is a miss, not a failure.
             assertTrue("expected an honest empty page", miss.wallpapers.isEmpty())
             assertEquals(null, miss.nextPage)
@@ -256,6 +256,47 @@ class WallpaperAccessLiveCheckTest {
             assertTrue(
                 "portrait original mislabeled: ${details.wallpaper.width}x${details.wallpaper.height}",
                 (details.wallpaper.height ?: 0) > (details.wallpaper.width ?: 0),
+            )
+        }
+
+    @Test
+    fun `a themed tab stays on theme through deep scroll pages`() =
+        runTest {
+            assumeTrue(live())
+            val configured = configured()
+            val first = configured.search(query = "nature", page = 1).getOrThrow()
+            assumeTrue("no continuation offered right now", first.nextPage != null)
+
+            // The 1.1.0 regression, inverted: every deep page of the
+            // Nature tab must come from a collection the theme names —
+            // the mixed Related band (galaxy, technology, …) is never
+            // walked for a themed root.
+            val theme = listOf("nature")
+            var deepBatches = 0
+            var nextPage = first.nextPage
+            while (nextPage != null && deepBatches < 3) {
+                val page = configured.search(query = "nature", page = nextPage).getOrThrow()
+                val collection =
+                    page.wallpapers
+                        .firstOrNull()
+                        ?.id
+                        ?.substringBefore('/')
+                if (collection != null) {
+                    deepBatches++
+                    assertTrue(
+                        "'$collection' is off the nature theme — the 1.1.0 regression",
+                        WallpaperAccessParser.matchesTheme(collection, theme),
+                    )
+                    assertTrue(
+                        "every item of the batch comes from '$collection'",
+                        page.wallpapers.all { it.id.startsWith("$collection/") },
+                    )
+                }
+                nextPage = page.nextPage
+            }
+            assertTrue(
+                "expected at least two deep nature batches, got $deepBatches",
+                deepBatches >= 2,
             )
         }
 

@@ -36,7 +36,7 @@ their files' TRUE dimensions right in the grid, verified pixel-exact.
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.wallpaperaccess` | 1.1.0 | 16 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpaperaccess` | 1.2.0 | 19 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -108,7 +108,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 └── src/…                    parser + provider + 34 unit tests
 providers/hdqwalls/          the second extension, same layout (21 tests)
 providers/wallpapers4k/      the third extension, same layout (19 tests)
-providers/wallpaperaccess/   the fourth extension, same layout (33 tests)
+providers/wallpaperaccess/   the fourth extension, same layout (41 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -268,17 +268,20 @@ its listings publish each file's TRUE dimensions right in the grid
   round-trip: the info sheet shows real resolutions from the listing
   alone, portrait stays portrait (736x1389 parses exactly that), and
   the host's v1.0.21 viewer never even needs to ask.
-- **One page, whole collection — then the related walk.** The site
+- **One page, whole collection — then the theme walk.** The site
   paginates NOTHING — `/most-popular`, `/new` and every collection
   (`/fall`, `/naruto`, `/4k-gaming`, …) serves its entire inventory,
   twenty to a hundred items, in one server-rendered page. The endless
-  scroll therefore rides the Related Wallpapers band every listing
-  carries: page one is the root's own batch, page two serves the band's
-  first recommended collection, page three the second's, and so on —
-  roughly ten collections (hundreds of wallpapers) per tab, the exact
-  journey a browser user clicking through Related Wallpapers takes. A
-  dead card is skipped gracefully; a band that runs out ends the feed
-  with `nextPage` null.
+  scroll therefore continues through OTHER collections, chosen the
+  honest way for each root: themed tabs (Nature, Space, Anime, search
+  hits) walk their SAME-THEME siblings — the collections the site's own
+  public `sitemap.xml` enumerates, matched by token boundary (`fall`
+  matches `fall-leaves`, never `waterfall`) — so the Nature tab stays
+  nature; the two ranked mixed feeds (Popular, Latest) ride the Related
+  Wallpapers band, the site's own cross-theme "keep browsing"
+  recommendations, honest for a mixed feed. A dead link is skipped
+  gracefully; a theme that runs out ends the feed with `nextPage` null.
+  The sitemap is read once per session, whatever the tab count.
 - **Previews and originals by directory.** Cells disclose
   `data-fullimg="/full/{id}.{ext}"` — the original file served directly
   — and the same filename under `/thumb/` is the site's lighter
@@ -288,33 +291,42 @@ its listings publish each file's TRUE dimensions right in the grid
   `/search`, so search never touches it: the query is slugified into
   the site's own collection address shape (`naruto` → `/naruto`,
   `4K Gaming!` → `/4k-gaming`) and that page is walked. An exact
-  collection hit serves its whole batch and then walks that
-  collection's own related band; a 404 is a miss — an honest empty
+  collection hit serves its whole batch and then walks the query's
+  same-theme siblings; a 404 is a miss — an honest empty
   results page, not a failure.
 - **Sixteen shelves.** Popular and Latest ride the host's `sorting`
   vocabulary (Latest walks the site's `/new` feed); Anime and People
   ride the host's `category` values — both real collections here; and
   Nature, Space, Abstract, Cars, Games, Movies, Animals, Fantasy,
   Music, Dark, Minimal and City are tag-style `query` presets naming
-  real collections (all verified live, 27–104 items each).
+  real collections (all verified live, 27–104 items each) — each
+  continuing, as the scroll deepens, into its own same-theme siblings.
+  (1.2.0: the theme walk replaced the mixed Related-band walk the
+  themed tabs rode in 1.1.0, which drifted a Nature tab into space
+  wallpapers mid-scroll — the band stays reserved for the two ranked
+  mixed feeds, where cross-theme is the honest continuation.)
 - **Details re-walk the listing.** The id IS the re-fetch address,
   `collection/fileName`, so `details()` re-serves the cell's own record
   — original, true dimensions, alt-derived title, owning collection as
   tag — with the site's own share URL (`collection#id`) as the source
   link. No author, no file size: honest nulls, never inventions.
-- **Verified.** 33 unit tests from real captured markup (both img
+- **Verified.** 41 unit tests from real captured markup (both img
   flavors — `src` and lazy `data-src`, attribute-order shuffles, the
   newline-spanning `data-download` value, malformed-cell isolation,
   404 and homepage-card shapes, entity-escaped titles, duplicate-cell
   insurance, slugify, the related-band walk with warm and cold caches,
   dead-card skip, band exhaustion, self-link/non-collection/duplicate
-  pruning) plus a gated `WallpaperAccessLiveCheckTest`
+  pruning, the sitemap walk — theme-token stripping, token-boundary
+  matching, the never-off-theme regression, single-read caching,
+  honest ends for empty themes and unreadable sitemaps) plus a gated
+  `WallpaperAccessLiveCheckTest`
   (`WALLPAPERACCESS_LIVE=1`): the popular batch with dimensions on
   every item, `data-or` against the file's own pixels, the lighter
   thumb, fresh and category listings, the related walk serving a real
-  second batch from a sibling collection, slug-guess hit and honest
-  miss, details round-trip, and a portrait-shape guard — all green
-  against the live site.
+  second batch from a sibling collection, the themed Nature tab
+  staying on theme through deep scroll pages, slug-guess hit and
+  honest miss, details round-trip, and a portrait-shape guard — all
+  green against the live site.
 
 ## Publishing (CI)
 
