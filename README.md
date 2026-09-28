@@ -4,17 +4,15 @@ Extension repository for the [Cloudimage](https://github.com/alamsamir7666-ux/Cl
 Android app — installable wallpaper-source packages, published to this repo's
 `gh-pages` branch.
 
-The repository ships four keyless scrapers, all modeled on the two-layer
+The repository ships three keyless scrapers, all modeled on the two-layer
 Provider/Extractor pattern used by CloudStream plugins: the star,
 **`cloudimage.wallpapercave`**, its sharp-eyed sibling
 **`cloudimage.hdqwalls`** — HD, 4K, 5K and 8K wallpapers from hdqwalls.com,
 the friendliest scraping target in the set (real pagination everywhere,
-direct search results, plain JPEG thumbnails) —
+direct search results, plain JPEG thumbnails) — and
 **`cloudimage.wallpapers4k`** — the resolution-first library at
 4kwallpapers.com, whose schema.org markup hands over title, tags and
-originals with unusual candor — and **`cloudimage.wallpaperaccess`** —
-the collection library at wallpaperaccess.com, whose listings publish
-their files' TRUE dimensions right in the grid, verified pixel-exact.
+originals with unusual candor.
 
 ## Install in the app
 
@@ -25,9 +23,9 @@ their files' TRUE dimensions right in the grid, verified pixel-exact.
    (`raw.githubusercontent.com/…/WallpaperExtensions/gh-pages/index.json`),
    verifies every package's SHA-256 on download, and installs it as a
    runtime-loaded provider.
-4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*,
-   *WallpaperAccess*, or any mix. No API key, no account — each reads its
-   site the way the site's own browser UI does.
+4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*, or any
+   mix. No API key, no account — each reads its site the way the site's
+   own browser UI does.
 
 ## Packages
 
@@ -36,7 +34,6 @@ their files' TRUE dimensions right in the grid, verified pixel-exact.
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.wallpaperaccess` | 1.5.0 | 16 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -108,7 +105,6 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 └── src/…                    parser + provider + 34 unit tests
 providers/hdqwalls/          the second extension, same layout (21 tests)
 providers/wallpapers4k/      the third extension, same layout (19 tests)
-providers/wallpaperaccess/   the fourth extension, same layout (27 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -255,80 +251,6 @@ tests):
   single-page search, query-preset shelves, and definitive details
   including a portrait-shape guard — all green against the live site.
 
-## The WallpaperAccess extension
-
-The fourth scraper, built for a collection-first site with a rare gift:
-its listings publish each file's TRUE dimensions right in the grid
-(~600 source lines plus 850 lines of tests):
-
-- **True dimensions, zero requests.** Every wallpaper cell carries
-  `data-or="3840x2160"` — the file's own dimensions — verified
-  pixel-exact against the served JPEG/PNG bytes (the live test suite
-  sniffs the image header itself). No card-crop trap, no details()
-  round-trip: the info sheet shows real resolutions from the listing
-  alone, portrait stays portrait (736x1389 parses exactly that), and
-  the host's v1.0.21 viewer never even needs to ask.
-- **One page, whole collection — then it ends, honestly.** The site
-  paginates NOTHING — `/most-popular`, `/new` and every collection
-  (`/fall`, `/naruto`, `/4k-gaming`, …) serves its entire inventory,
-  twenty to a hundred items, in one server-rendered page — so every
-  tab serves that one batch and answers `nextPage` null. Deeper pages
-  answer empty without a request. (1.4.0 was a behavioral revert to
-  1.0.0: the endless-scroll walks that shipped in 1.1.0–1.3.0 — first
-  the site's mixed Related band, then same-theme sitemap siblings —
-  were reported stalling themed tabs mid-scroll in the app, so the
-  walk machinery came out wholesale in favor of the version users
-  never reported a problem against.)
-- **Browser-paced fetches (1.5.0).** The host fires a pinned source's
-  every section first page AT ONCE — sixteen parallel requests here —
-  and this site's Cloudflare zone reads that burst as bot traffic:
-  challenged phones spin the app's WebView-based solver (a full
-  Chromium — hundreds of MB of RAM, seconds of challenge JavaScript,
-  the whole phone dragging; on-device reports measured 400–500 MB
-  right at open). So the provider paces itself: at most three requests
-  in flight and at least 400 ms between request starts, one shared
-  gate per instance — the sixteen-tab open becomes a browser-paced
-  queue, the rhythm of a person paging through the site. Every
-  request presents a mainstream Android Chrome User-Agent (the
-  traffic the zone is tuned to serve; a WebView-earned clearance
-  still overrides it on replay), and listing pages are parsed off the
-  host's main dispatcher — sixteen 200-KB regex parses belong on the
-  default dispatcher, not the UI thread.
-- **Previews and originals by directory.** Cells disclose
-  `data-fullimg="/full/{id}.{ext}"` — the original file served directly
-  — and the same filename under `/thumb/` is the site's lighter
-  600-pixel preview (verified fifteen-for-fifteen across six listings,
-  both extensions).
-- **Robots-compliant search.** The site's robots.txt excludes
-  `/search`, so search never touches it: the query is slugified into
-  the site's own collection address shape (`naruto` → `/naruto`,
-  `4K Gaming!` → `/4k-gaming`) and that page is walked. An exact
-  collection hit serves its whole batch; a 404 is a miss — an honest
-  empty results page, not a failure.
-- **Sixteen shelves.** Popular and Latest ride the host's `sorting`
-  vocabulary (Latest walks the site's `/new` feed); Anime and People
-  ride the host's `category` values — both real collections here; and
-  Nature, Space, Abstract, Cars, Games, Movies, Animals, Fantasy,
-  Music, Dark, Minimal and City are tag-style `query` presets naming
-  real collections (all verified live, 27–104 items each).
-- **Details re-walk the listing.** The id IS the re-fetch address,
-  `collection/fileName`, so `details()` re-serves the cell's own record
-  — original, true dimensions, alt-derived title, owning collection as
-  tag — with the site's own share URL (`collection#id`) as the source
-  link. No author, no file size: honest nulls, never inventions.
-- **Verified.** 27 unit tests from real captured markup (both img
-  flavors — `src` and lazy `data-src`, attribute-order shuffles, the
-  newline-spanning `data-download` value, malformed-cell isolation,
-  404 and homepage-card shapes, entity-escaped titles, duplicate-cell
-  insurance, slugify, single-page honesty, host-vocabulary routing,
-  detail records, the browser identity on every request, and the
-  pace gate's in-flight cap) plus a gated `WallpaperAccessLiveCheckTest`
-  (`WALLPAPERACCESS_LIVE=1`): the popular batch with dimensions on
-  every item, `data-or` against the file's own pixels, the lighter
-  thumb, fresh and category listings, slug-guess hit and honest
-  miss, details round-trip, and a portrait-shape guard — all green
-  against the live site.
-
 ## Publishing (CI)
 
 On every push to `main` that touches `providers/**`, `tools/**`, or the
@@ -369,8 +291,6 @@ done
 # → providers/hdqwalls/build/outputs/extension/cloudimage.hdqwalls.zip
 ./gradlew :providers:wallpapers4k:check :providers:wallpapers4k:packageExtension
 # → providers/wallpapers4k/build/outputs/extension/cloudimage.wallpapers4k.zip
-./gradlew :providers:wallpaperaccess:check :providers:wallpaperaccess:packageExtension
-# → providers/wallpaperaccess/build/outputs/extension/cloudimage.wallpaperaccess.zip
 ```
 
 ## Adding another extension
