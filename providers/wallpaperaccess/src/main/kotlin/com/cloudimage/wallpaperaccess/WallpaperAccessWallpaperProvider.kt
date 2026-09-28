@@ -12,6 +12,12 @@ import com.cloudimage.provider.api.ProviderSettings
 import com.cloudimage.provider.api.Wallpaper
 import com.cloudimage.provider.api.WallpaperDetails
 import com.cloudimage.provider.api.WallpaperProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * wallpaperaccess.com (https://wallpaperaccess.com) as a Cloudimage
@@ -83,18 +89,41 @@ import com.cloudimage.provider.api.WallpaperProvider
  * browser tab on the same page costs the same — and fetches happen only
  * on explicit user actions. Preview and original image URLs are fetched
  * only by the app's image pipeline when it renders or downloads an item,
- * exactly as the site's own markup directs every browser. The site serves
- * plain non-browser User-Agents without challenge (verified live against
- * every path this provider touches), so no browser impersonation is
- * needed.
+ * exactly as the site's own markup directs every browser.
+ *
+ * ## Pacing (1.5.0)
+ *
+ * The host loads a pinned source's every section first page AT ONCE —
+ * sixteen parallel requests here. That burst is bot-shaped traffic to
+ * the site's Cloudflare zone (investigation crawls were banned outright
+ * until spaced ten-plus seconds apart), and a challenged phone pays
+ * twice: the app's WebView-based Cloudflare solver spins up a full
+ * Chromium view — hundreds of MB of RAM and seconds of challenge
+ * JavaScript, the whole phone dragging — and every section row waits on
+ * it. On-device reports of the app eating 400-500 MB right at open
+ * match exactly that mechanism. So this provider paces ITSELF: one
+ * shared gate per instance keeps at most [MAX_IN_FLIGHT_REQUESTS]
+ * requests in the air and spaces request starts at least
+ * [REQUEST_START_GAP_MS] apart — the sixteen-tab open becomes a
+ * browser-paced queue of single-page fetches, the same rhythm a person
+ * paging through the site produces, and no escalation ever has a burst
+ * to bite on. Every request also presents the User-Agent of the browser
+ * this provider effectively is — the traffic the zone is tuned to
+ * serve; the host facade applies provider headers after its own agent,
+ * and a WebView-earned Cloudflare clearance still overrides both, so
+ * the priority stays correct in every state. Listing pages are PARSED
+ * off the caller's dispatcher too: the host dispatches providers on its
+ * main context, and sixteen 200-KB regex parses belong on the default
+ * dispatcher, not the UI thread.
  *
  * ## State
  *
- * The contract asks plugins to be stateless; the only mutable state is
- * the collection-name pool feeding [suggestTags] — a bonus, never a
- * dependency. A fresh instance answers identically, at worst without
- * suggestions. The pool is guarded by one lock; sections load in parallel
- * on the host side.
+ * The contract asks plugins to be stateless; the mutable state is the
+ * collection-name pool feeding [suggestTags] — a bonus, never a
+ * dependency — and the pacing gate's counters, which are timing, never
+ * content: a fresh instance answers identically, at worst without
+ * suggestions. The pool and the gate are guarded by their own locks;
+ * sections load in parallel on the host side.
  *
  * ## Dimensions
  *
@@ -112,12 +141,17 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperAccess",
-            // 1.4.0 is a behavioral revert: the code below is 1.0.0's,
-            // restored wholesale after the endless-scroll walks (1.1.0's
-            // related band, 1.2.0/1.3.0's sitemap siblings) were reported
-            // stalling themed tabs in the app. The version code rides
-            // above 1.3.0 so installed devices accept the downgrade.
-            versionName = "1.4.0",
+            // 1.5.0 keeps 1.0.0's single-batch behavior (the 1.4.0 revert
+            // of the endless-scroll walks) and fixes the open-the-app lag
+            // reported on real devices: the host fires every section's
+            // first page at once — sixteen parallel requests here — which
+            // this site's Cloudflare zone reads as a bot burst and answers
+            // with a challenge, and the app's WebView solver is a full
+            // Chromium (hundreds of MB). The provider now paces its own
+            // fetches (max three in flight, spaced starts), presents a
+            // browser User-Agent, and parses listings off the main
+            // dispatcher. The version code rides above 1.4.0.
+            versionName = "1.5.0",
             author = "Cloudimage",
             description = "HD, 4K and up wallpapers from wallpaperaccess.com - scraped, keyless.",
             // The site curates its collections and carries no per-item
@@ -260,7 +294,7 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
             if (!response.isSuccessful) {
                 throw httpError(response.statusCode)
             }
-            val grid = WallpaperAccessParser.parseGrid(response.bodyText)
+            val grid = parseGridOffMain(response.bodyText)
             val item =
                 grid
                     .firstOrNull { it.numericId == numericId }
@@ -312,6 +346,10 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         return Page(gridWallpapers(response.bodyText, slug), nextPage = null)
     }
 
+    /** A listing page's grid, parsed off the caller's dispatcher (see Pacing). */
+    private suspend fun parseGridOffMain(html: String): List<WallpaperAccessParser.GridItem> =
+        withContext(Dispatchers.Default) { WallpaperAccessParser.parseGrid(html) }
+
     /** The fresh batch — the `/new` feed the site labels New Wallpapers. */
     private suspend fun freshBatch(): List<Wallpaper> {
         val response = get("$BASE_URL/$FRESH_SLUG")
@@ -334,26 +372,27 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
      * `collection/fileName`, so [details] can always re-walk the listing
      * the item came from.
      */
-    private fun gridWallpapers(
+    private suspend fun gridWallpapers(
         html: String,
         listingSlug: String,
-    ): List<Wallpaper> {
-        val grid = WallpaperAccessParser.parseGrid(html)
-        return grid
-            .map { item ->
-                val tag = item.slug ?: listingSlug
-                Wallpaper(
-                    id = "$listingSlug/${item.fileName}",
-                    providerId = ID,
-                    thumbUrl = "$BASE_URL/thumb/${item.fileName}",
-                    fullUrl = "$BASE_URL/full/${item.fileName}",
-                    title = item.title,
-                    width = item.width,
-                    height = item.height,
-                    tags = listOf(tag),
-                )
-            }.let(::rememberTagsIn)
-    }
+    ): List<Wallpaper> =
+        withContext(Dispatchers.Default) {
+            val grid = WallpaperAccessParser.parseGrid(html)
+            grid
+                .map { item ->
+                    val tag = item.slug ?: listingSlug
+                    Wallpaper(
+                        id = "$listingSlug/${item.fileName}",
+                        providerId = ID,
+                        thumbUrl = "$BASE_URL/thumb/${item.fileName}",
+                        fullUrl = "$BASE_URL/full/${item.fileName}",
+                        title = item.title,
+                        width = item.width,
+                        height = item.height,
+                        tags = listOf(tag),
+                    )
+                }.let(::rememberTagsIn)
+        }
 
     /** Harvests seen collection names for [suggestTags]; a bonus, never a dependency. */
     private fun rememberTagsIn(wallpapers: List<Wallpaper>): List<Wallpaper> {
@@ -368,9 +407,32 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
 
     // ------------------------------------------------------------- plumbing
 
-    private suspend fun get(url: String): ProviderHttpResponse =
-        httpClient?.get(url)
-            ?: error("configure() was not called")
+    /**
+     * The one network path: every fetch goes through the browser-paced
+     * gate (see Pacing). A permit is held for the whole exchange — the
+     * spacing wait, the request, and the response read — so the in-flight
+     * cap is exact; the slot arithmetic under [startGate] is the only
+     * thing the lock ever guards, never the request itself. Cancellation
+     * unwinds cleanly: a cancelled wait never reached the client, and the
+     * `finally` returns the permit whatever happens.
+     */
+    private suspend fun get(url: String): ProviderHttpResponse {
+        inFlight.acquire()
+        try {
+            val waitMillis =
+                startGate.withLock {
+                    val now = System.currentTimeMillis()
+                    val slot = maxOf(nextSlotAtMillis, now)
+                    nextSlotAtMillis = slot + REQUEST_START_GAP_MS
+                    (slot - now).coerceAtLeast(0L)
+                }
+            if (waitMillis > 0) delay(waitMillis)
+            return httpClient?.get(url, REQUEST_HEADERS)
+                ?: error("configure() was not called")
+        } finally {
+            inFlight.release()
+        }
+    }
 
     private fun httpError(statusCode: Int): IllegalStateException = IllegalStateException("wallpaperaccess answered HTTP $statusCode")
 
@@ -397,9 +459,44 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         const val TAG_POOL_LIMIT = 200
         const val TAG_SUGGESTION_LIMIT = 8
 
+        /**
+         * The paced-fetch gate's in-flight cap — the most provider
+         * requests this instance ever has in the air at once.
+         */
+        const val MAX_IN_FLIGHT_REQUESTS = 3
+
+        /**
+         * The paced-fetch gate's minimum spacing between request STARTS.
+         * Sixteen section loads queue at about 2.5 requests a second —
+         * browser-paced, never bot-paced (see Pacing).
+         */
+        const val REQUEST_START_GAP_MS = 400L
+
+        /**
+         * The identity every request presents: a mainstream Android
+         * Chrome — the traffic shape the site serves to every visitor.
+         * The host facade applies provider headers after its own agent,
+         * so this wins; a WebView-earned Cloudflare clearance overrides
+         * it again on replay, which is exactly the right priority.
+         */
+        const val BROWSER_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
+
+        /** The headers every request carries: the browser identity. */
+        val REQUEST_HEADERS = mapOf("User-Agent" to BROWSER_USER_AGENT)
+
         /** One lock over the pool; sections load in parallel. */
         val lock = Any()
     }
 
     private val slugPool = LinkedHashSet<String>()
+
+    /** The paced-fetch gate's in-flight cap; see [get]. */
+    private val inFlight = Semaphore(MAX_IN_FLIGHT_REQUESTS)
+
+    /** The paced-fetch gate's start-spacing lock; see [get]. */
+    private val startGate = Mutex()
+
+    /** The next request start's slot, wall-clock millis; guarded by [startGate]. */
+    private var nextSlotAtMillis = 0L
 }

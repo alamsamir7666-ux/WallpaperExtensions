@@ -36,7 +36,7 @@ their files' TRUE dimensions right in the grid, verified pixel-exact.
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.wallpaperaccess` | 1.4.0 | 15 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpaperaccess` | 1.5.0 | 16 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -108,7 +108,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 └── src/…                    parser + provider + 34 unit tests
 providers/hdqwalls/          the second extension, same layout (21 tests)
 providers/wallpapers4k/      the third extension, same layout (19 tests)
-providers/wallpaperaccess/   the fourth extension, same layout (25 tests)
+providers/wallpaperaccess/   the fourth extension, same layout (27 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -273,12 +273,27 @@ its listings publish each file's TRUE dimensions right in the grid
   (`/fall`, `/naruto`, `/4k-gaming`, …) serves its entire inventory,
   twenty to a hundred items, in one server-rendered page — so every
   tab serves that one batch and answers `nextPage` null. Deeper pages
-  answer empty without a request. (1.4.0 is a behavioral revert to
+  answer empty without a request. (1.4.0 was a behavioral revert to
   1.0.0: the endless-scroll walks that shipped in 1.1.0–1.3.0 — first
   the site's mixed Related band, then same-theme sitemap siblings —
   were reported stalling themed tabs mid-scroll in the app, so the
   walk machinery came out wholesale in favor of the version users
   never reported a problem against.)
+- **Browser-paced fetches (1.5.0).** The host fires a pinned source's
+  every section first page AT ONCE — sixteen parallel requests here —
+  and this site's Cloudflare zone reads that burst as bot traffic:
+  challenged phones spin the app's WebView-based solver (a full
+  Chromium — hundreds of MB of RAM, seconds of challenge JavaScript,
+  the whole phone dragging; on-device reports measured 400–500 MB
+  right at open). So the provider paces itself: at most three requests
+  in flight and at least 400 ms between request starts, one shared
+  gate per instance — the sixteen-tab open becomes a browser-paced
+  queue, the rhythm of a person paging through the site. Every
+  request presents a mainstream Android Chrome User-Agent (the
+  traffic the zone is tuned to serve; a WebView-earned clearance
+  still overrides it on replay), and listing pages are parsed off the
+  host's main dispatcher — sixteen 200-KB regex parses belong on the
+  default dispatcher, not the UI thread.
 - **Previews and originals by directory.** Cells disclose
   `data-fullimg="/full/{id}.{ext}"` — the original file served directly
   — and the same filename under `/thumb/` is the site's lighter
@@ -288,9 +303,8 @@ its listings publish each file's TRUE dimensions right in the grid
   `/search`, so search never touches it: the query is slugified into
   the site's own collection address shape (`naruto` → `/naruto`,
   `4K Gaming!` → `/4k-gaming`) and that page is walked. An exact
-  collection hit serves its whole batch and then walks the query's
-  same-theme siblings; a 404 is a miss — an honest empty
-  results page, not a failure.
+  collection hit serves its whole batch; a 404 is a miss — an honest
+  empty results page, not a failure.
 - **Sixteen shelves.** Popular and Latest ride the host's `sorting`
   vocabulary (Latest walks the site's `/new` feed); Anime and People
   ride the host's `category` values — both real collections here; and
@@ -302,12 +316,13 @@ its listings publish each file's TRUE dimensions right in the grid
   — original, true dimensions, alt-derived title, owning collection as
   tag — with the site's own share URL (`collection#id`) as the source
   link. No author, no file size: honest nulls, never inventions.
-- **Verified.** 25 unit tests from real captured markup (both img
+- **Verified.** 27 unit tests from real captured markup (both img
   flavors — `src` and lazy `data-src`, attribute-order shuffles, the
   newline-spanning `data-download` value, malformed-cell isolation,
   404 and homepage-card shapes, entity-escaped titles, duplicate-cell
   insurance, slugify, single-page honesty, host-vocabulary routing,
-  detail records) plus a gated `WallpaperAccessLiveCheckTest`
+  detail records, the browser identity on every request, and the
+  pace gate's in-flight cap) plus a gated `WallpaperAccessLiveCheckTest`
   (`WALLPAPERACCESS_LIVE=1`): the popular batch with dimensions on
   every item, `data-or` against the file's own pixels, the lighter
   thumb, fresh and category listings, slug-guess hit and honest

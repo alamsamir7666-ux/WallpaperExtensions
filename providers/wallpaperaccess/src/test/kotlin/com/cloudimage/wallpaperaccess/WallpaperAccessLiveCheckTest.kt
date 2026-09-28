@@ -30,9 +30,10 @@ class WallpaperAccessLiveCheckTest {
     private val provider = WallpaperAccessWallpaperProvider()
 
     /**
-     * The plugin facade over HttpURLConnection, sending the app's own
-     * User-Agent — the same identity [com.cloudimage.core.network] sends,
-     * and one the site verifiably serves without challenge.
+     * The plugin facade over HttpURLConnection. It sets the app's own
+     * User-Agent first and then applies the provider's headers on top —
+     * the same layering the real host client performs — so live requests
+     * exercise exactly the browser identity the provider presents.
      */
     private class LiveClient : ProviderHttpClient {
         override suspend fun get(

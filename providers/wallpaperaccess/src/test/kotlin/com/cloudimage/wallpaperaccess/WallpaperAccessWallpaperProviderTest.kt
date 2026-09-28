@@ -5,11 +5,16 @@ import com.cloudimage.provider.api.HomeSection
 import com.cloudimage.provider.api.ProviderHttpClient
 import com.cloudimage.provider.api.ProviderHttpResponse
 import com.cloudimage.provider.api.ProviderSettings
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * WallpaperAccess provider over a scripted fake of the plugin-facing HTTP
@@ -17,8 +22,9 @@ import org.junit.Test
  * data-attribute listing grid (popular, fresh, collections, slug-guessed
  * search), the single-page site guard, the robots-compliant slug-guess
  * search with its 404-is-a-miss contract, the detail record re-walked
- * from the id's own listing, and the host-vocabulary routing all stay
- * covered without a network.
+ * from the id's own listing, the host-vocabulary routing, the browser
+ * identity every request presents, and the paced-fetch gate's in-flight
+ * cap all stay covered without a network.
  */
 class WallpaperAccessWallpaperProviderTest {
     private val provider = WallpaperAccessWallpaperProvider()
@@ -26,10 +32,12 @@ class WallpaperAccessWallpaperProviderTest {
     /**
      * URL-routed responses; unmatched URLs answer 500 to fail loudly.
      * Routes are checked in insertion order, so listing-specific keys must
-     * be registered before shorter prefixes.
+     * be registered before shorter prefixes. The headers each request
+     * carried are recorded alongside the URLs.
      */
     private class FakeClient : ProviderHttpClient {
         val requests = mutableListOf<String>()
+        val headerSets = mutableListOf<Map<String, String>>()
         var routes: Map<String, ProviderHttpResponse> = emptyMap()
 
         override suspend fun get(
@@ -37,10 +45,44 @@ class WallpaperAccessWallpaperProviderTest {
             headers: Map<String, String>,
         ): ProviderHttpResponse {
             requests += url
+            headerSets += headers
             return routes.entries
                 .firstOrNull { (prefix, _) -> url.startsWith(prefix) }
                 ?.value
                 ?: ProviderHttpResponse(500, emptyMap(), ByteArray(0))
+        }
+    }
+
+    /**
+     * A client that parks every request on one gate, so the pace gate's
+     * in-flight cap can be observed: while the gate is closed, exactly the
+     * capped number of requests ever sit inside the client.
+     */
+    private class GatedClient : ProviderHttpClient {
+        private val gate = CompletableDeferred<Unit>()
+        private val active = AtomicInteger(0)
+        private val maxObserved = AtomicInteger(0)
+        private val servedCount = AtomicInteger(0)
+
+        val maxInFlight: Int get() = maxObserved.get()
+
+        /** Requests that made it through the gate and answered. */
+        val served: Int get() = servedCount.get()
+
+        override suspend fun get(
+            url: String,
+            headers: Map<String, String>,
+        ): ProviderHttpResponse {
+            val now = active.incrementAndGet()
+            maxObserved.accumulateAndGet(now) { a, b -> maxOf(a, b) }
+            gate.await()
+            active.decrementAndGet()
+            servedCount.incrementAndGet()
+            return ProviderHttpResponse(200, emptyMap(), ByteArray(0))
+        }
+
+        fun release() {
+            gate.complete(Unit)
         }
     }
 
@@ -409,6 +451,66 @@ class WallpaperAccessWallpaperProviderTest {
                     .contains("nature"),
             )
             assertTrue(sections.none { it.id == HomeSection.DEFAULT_ID && it.title != "Popular" })
+        }
+
+    // --------------------------------------------------- pacing and identity
+
+    @Test
+    fun `every request presents the browser user agent`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/most-popular" to ok(popularGrid),
+                        "https://wallpaperaccess.com/fall" to ok(fallGrid),
+                    ),
+                )
+
+            provider.popular(page = 1).getOrThrow()
+            provider.search(query = "fall", page = 1).getOrThrow()
+
+            assertEquals(
+                "the identity is the traffic the zone is tuned to serve",
+                listOf(
+                    mapOf(
+                        "User-Agent" to
+                            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36",
+                    ),
+                    mapOf(
+                        "User-Agent" to
+                            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36",
+                    ),
+                ),
+                client.headerSets,
+            )
+        }
+
+    @Test
+    fun `the pace gate keeps at most three requests in flight`() =
+        runTest {
+            val client = GatedClient()
+            provider.configure(client, ProviderSettings { null })
+
+            // Six concurrent section-shaped calls against a client that
+            // parks every request: the gate lets exactly its cap through,
+            // the rest wait for permits — never for the parked client.
+            val jobs =
+                (1..6).map { index ->
+                    async { provider.search(query = "collection-$index", page = 1) }
+                }
+            advanceUntilIdle()
+
+            assertEquals(
+                "the gate caps in-flight requests at its limit",
+                3,
+                client.maxInFlight,
+            )
+
+            client.release()
+            jobs.awaitAll()
+
+            assertEquals("every queued fetch ran", 6, client.served)
+            assertTrue("every call settled", jobs.all { it.isCompleted })
         }
 
     @Test

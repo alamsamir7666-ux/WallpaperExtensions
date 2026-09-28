@@ -1,8 +1,8 @@
 {
   "id": "cloudimage.wallpaperaccess",
   "name": "WallpaperAccess",
-  "versionName": "1.4.0",
-  "versionCode": 5,
+  "versionName": "1.5.0",
+  "versionCode": 6,
   "author": "Cloudimage",
   "description": "HD, 4K and up wallpapers from wallpaperaccess.com - scraped, keyless.",
   "apiVersion": 1,
