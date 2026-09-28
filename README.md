@@ -14,7 +14,9 @@ direct search results, plain JPEG thumbnails) —
 4kwallpapers.com, whose schema.org markup hands over title, tags and
 originals with unusual candor — and **`cloudimage.alphacoders`** —
 Wallpaper Abyss at alphacoders.com, the deepest library of the set,
-whose listings disclose the original file itself, right in the grid.
+whose listings disclose the original file itself, right in the grid,
+and whose real search endpoint delivers exactly what its own website
+shows.
 
 ## Install in the app
 
@@ -36,7 +38,7 @@ whose listings disclose the original file itself, right in the grid.
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.alphacoders` | 1.0.1 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.alphacoders` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -108,7 +110,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 └── src/…                    parser + provider + 34 unit tests
 providers/hdqwalls/          the second extension, same layout (21 tests)
 providers/wallpapers4k/      the third extension, same layout (19 tests)
-providers/alphacoders/       the fourth extension, same layout (25 tests)
+providers/alphacoders/       the fourth extension, same layout (29 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -268,15 +270,21 @@ lines plus 900 lines of tests):
   CDN serves directly (verified live: a 3840x2400 JPG at 1.4 MB fetched
   byte-for-byte, no hotlink protection). Grid items carry a working
   download URL before details are ever fetched, PNG extensions intact.
-- **Topic addresses instead of search.** The site consolidated its
-  browsing onto `/{slug}-wallpapers` pages — `anime-wallpapers` (211,000+
-  wallpapers), `naruto-wallpapers` (5,600+), `nature-wallpapers`
-  (63,000+) — paginated `?page=N`, fifteen per page, with a hard 404 past
-  the end. Search slugifies into that address shape (the site's own
-  robots.txt excludes its internal `/search` — this never touches it);
-  an exact topic hit walks its pages, a 404 is an honest miss. The
-  shelves name their topics' canonical addresses, because one redirecting
-  plural (`cars-`) lands on the Pixar movie, not on vehicles.
+- **The site's real search, not a guess (1.1.0).** The site's own
+  search box GETs `/search/view?q={query}&type=wallpaper`, answering the
+  same fifteen-cell schema.org grid, paginated by `&page=N` — and this
+  provider rides exactly that. 1.0.x approximated search by guessing
+  topic addresses (`indian actress` → `/indian-actress-wallpapers`),
+  which the site 301-redirected to the generic `indian` topic — cricket
+  and landscapes, nothing like its own search results. A no-match query
+  is the site's own empty grid (an honest miss), a page past the result
+  set's end answers empty too (verified at page 999 — never clamped,
+  never repeated), and the twelve tag shelves ride the same endpoint
+  with plain search terms. The site's robots.txt excludes that path for
+  crawlers; this provider touches it only on explicit user searches —
+  one request per action, byte-identical to the site's own search box —
+  never crawling or enumerating (a deliberate, disclosed exception;
+  every other path stays inside the allowances).
 - **Honest ends by construction.** The infinite-scroll listing carries
   no "more exists" signal, so a feed offers `nextPage` only when its page
   served items — and the end arrives as the site's own 404, mapped to an
@@ -295,33 +303,33 @@ lines plus 900 lines of tests):
   parser filters exactly that observed tail, so titles, tags and tag
   suggestions carry the site's own subject vocabulary — entities decoded
   (`Naruto & Sasuke`, not `Naruto &amp; Sasuke`).
-- **Politeness.** The site's robots.txt allows everything this provider
-  touches (community pages, internal search, buy pages and the art/picture
-  sections are excluded — none used). One request per page of fifteen on
-  explicit user actions, capped at a hundred pages; the one 404 probe at
-  a feed's end is the same request a browser's next-page arrow produces.
-  The site serves plain non-browser User-Agents without challenge
-  (verified live against every path touched), and the image CDN serves
-  the thumbnail and original exactly where the markup points every
-  browser. The 250-KB listing pages parse inline on the caller's
-  dispatcher — the same model as the other three scrapers — because the
-  plugin ABI exposes no coroutine machinery to payload code (1.0.0
-  shipped a `withContext(Dispatchers.Default)` hop that no release APK
-  could bind; 1.0.1 parses inline, and the single-pass regex scan stays
-  cheap while the host's HTTP facade keeps the network off the main
-  thread).
-- **Verified.** 25 unit tests from real captured markup (the full
+- **Politeness.** One request per page of fifteen on explicit user
+  actions, capped at a hundred pages; the one boundary probe at a feed's
+  end is the same request a browser's next-page arrow produces. The site
+  serves plain non-browser User-Agents without challenge (verified live
+  against every path touched), and the image CDN serves the thumbnail and
+  original exactly where the markup points every browser. The 250-KB
+  listing pages parse inline on the caller's dispatcher — the same model
+  as the other three scrapers — because the plugin ABI exposes no
+  coroutine machinery to payload code (1.0.0 shipped a
+  `withContext(Dispatchers.Default)` hop that no release APK could bind;
+  1.0.1 parses inline, and the single-pass regex scan stays cheap while
+  the host's HTTP facade keeps the network off the main thread).
+- **Verified.** 29 unit tests from real captured markup (the full
   schema.org cell with its duplicated keywords and boilerplate tail,
   empty- and filled-name cells, flipped meta attribute order, malformed-
-  cell isolation, the 404 boundaries that end feeds and searches, the
-  past-cap guard, slugification, host-vocabulary routing, canonical
-  presets, the detail record's dims/author/size/colors, the by-author
-  title form, PNG extensions, KB sizes, the no-dims regression guard)
-  plus a gated `AlphaCodersLiveCheckTest` (`ALPHACODERS_LIVE=1`):
-  the popular batch through a fresh page two, the newest and anime
-  feeds, topic-search hit and honest miss, details with true dimensions
-  and file size, the original and thumbnail really serving, and a PNG
-  end-to-end — all green against the live site.
+  cell isolation, the 404 boundaries that end feeds, the real search
+  endpoint's routing and encoding, its hit mapping, its empty-grid miss
+  and past-the-end shapes, its 404 defense and deep-cap guard, the
+  detail record's dims/author/size/colors, the by-author title form, PNG
+  extensions, KB sizes, the no-dims regression guard, host-vocabulary
+  routing, the twelve search-ridden shelves) plus a gated
+  `AlphaCodersLiveCheckTest` (`ALPHACODERS_LIVE=1`): the popular batch
+  through a fresh page two, the newest and anime feeds, real search
+  matching its query with a non-repeating page two and an honest garbage
+  miss, details with true dimensions and file size, the original and
+  thumbnail really serving, and a PNG end-to-end — all green against the
+  live site.
 
 ## Publishing (CI)
 

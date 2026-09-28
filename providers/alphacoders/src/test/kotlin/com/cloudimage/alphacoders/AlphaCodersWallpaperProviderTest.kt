@@ -13,11 +13,11 @@ import org.junit.Test
 /**
  * Alpha Coders provider over a scripted fake of the plugin-facing HTTP
  * facade, with fixtures cut from the live site's markup: the shared
- * schema.org listing grid (ranked feeds and topic pages), the 404
- * boundaries that end feeds and searches honestly, the big.php detail
- * record with its true dimensions, author, file size and colors, the
- * canonical-slug presets, and the host-vocabulary routing all stay covered
- * without a network.
+ * schema.org listing grid (ranked feeds and topic pages), the real search
+ * endpoint's results grid and its honest empty-grid boundaries, the 404
+ * boundaries that end feeds honestly, the big.php detail record with its
+ * true dimensions, author, file size and colors, and the host-vocabulary
+ * routing all stay covered without a network.
  */
 class AlphaCodersWallpaperProviderTest {
     private val provider = AlphaCodersWallpaperProvider()
@@ -135,6 +135,35 @@ class AlphaCodersWallpaperProviderTest {
             <meta content="https://wall.alphacoders.com/big.php?i=1328396" itemprop="url">
             <meta content="https://images4.alphacoders.com/132/thumb-350-1328396.webp" itemprop="thumbnailUrl">
             <meta content="Itachi Uchiha, manga, Anime, Naruto, desktop wallpaper, background, hd wallpaper" itemprop="keywords">
+        </div>
+        """.trimIndent()
+
+    /**
+     * The real search results grid for "indian actress" — captured from
+     * the site's own search endpoint (`/search/view?q=indian+actress`),
+     * the exact shape 1.1.0's search rides. Same schema.org cell as the
+     * listings; the search grid's container class differs
+     * (`thumb-container-wallpaper-desktop` vs the feeds'
+     * `-not-computer`), which the parser is agnostic to — it splits on
+     * the itemprop, never the class.
+     */
+    private val searchGrid =
+        """
+        <div id="content_1453228" class="thumb-container-wallpaper-desktop" itemprop="associatedMedia"
+                    itemscope itemtype="http://schema.org/ImageObject">
+                <meta itemprop="contentUrl" content="https://images3.alphacoders.com/269/269807.jpg">
+            <meta itemprop="url" content="https://wall.alphacoders.com/big.php?i=269807">
+            <meta itemprop="name" content="Umesh Yadav">
+            <meta itemprop="thumbnailUrl" content="https://images3.alphacoders.com/269/thumb-350-269807.webp">
+            <meta itemprop="keywords" content="India, Indian, yadav, cricket, Sports, desktop wallpaper, background, hd wallpaper">
+        </div>
+        <div id="content_3222107" class="thumb-container-wallpaper-desktop" itemprop="associatedMedia"
+                    itemscope itemtype="http://schema.org/ImageObject">
+                <meta itemprop="contentUrl" content="https://images2.alphacoders.com/686/686465.jpg">
+            <meta itemprop="url" content="https://wall.alphacoders.com/big.php?i=686465">
+            <meta itemprop="name" content="Stunning Actress Jewelry HD Wallpaper">
+            <meta itemprop="thumbnailUrl" content="https://images2.alphacoders.com/686/thumb-350-686465.webp">
+            <meta itemprop="keywords" content="jewelry, brown eyes, brunette, Indian, actress, Celebrity, Sonam Kapoor, desktop wallpaper, background, hd wallpaper">
         </div>
         """.trimIndent()
 
@@ -433,13 +462,13 @@ class AlphaCodersWallpaperProviderTest {
         }
 
     @Test
-    fun `search slugifies into the site's own topic addresses`() =
+    fun `search rides the site's real search endpoint`() =
         runTest {
             val client =
                 configureWith(
                     linkedMapOf(
-                        "https://alphacoders.com/naruto-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/4k-gaming-wallpapers" to ok(popularGrid),
+                        "https://alphacoders.com/search/view?q=Naruto&type=wallpaper" to ok(searchGrid),
+                        "https://alphacoders.com/search/view?q=4K+Gaming%21&type=wallpaper" to ok(searchGrid),
                         "https://alphacoders.com/popular-wallpapers" to ok(popularGrid),
                     ),
                 )
@@ -450,8 +479,8 @@ class AlphaCodersWallpaperProviderTest {
 
             assertEquals(
                 listOf(
-                    "https://alphacoders.com/naruto-wallpapers",
-                    "https://alphacoders.com/4k-gaming-wallpapers",
+                    "https://alphacoders.com/search/view?q=Naruto&type=wallpaper",
+                    "https://alphacoders.com/search/view?q=4K+Gaming%21&type=wallpaper",
                     "https://alphacoders.com/popular-wallpapers",
                 ),
                 client.requests,
@@ -459,41 +488,117 @@ class AlphaCodersWallpaperProviderTest {
         }
 
     @Test
-    fun `an unknown search slug is an honest miss`() =
+    fun `a search hit serves the site's own ranked matches`() =
+        runTest {
+            configureWith(
+                linkedMapOf(
+                    "https://alphacoders.com/search/view?q=indian+actress&type=wallpaper" to ok(searchGrid),
+                ),
+            )
+
+            val page = provider.search(query = "indian actress").getOrThrow()
+
+            assertEquals(2, page.wallpapers.size)
+            val actress = page.wallpapers[1]
+            assertEquals("686465", actress.id)
+            assertEquals("Stunning Actress Jewelry HD Wallpaper", actress.title)
+            assertEquals("https://images2.alphacoders.com/686/686465.jpg", actress.fullUrl)
+            assertEquals("https://images2.alphacoders.com/686/thumb-350-686465.webp", actress.thumbUrl)
+            // The keyword row minus its boilerplate tail rides as tags
+            // (capped at six per cell — "Sonam Kapoor" is the row's
+            // seventh subject and lives in details' fuller record).
+            assertTrue(actress.tags.contains("actress"))
+            assertTrue(actress.tags.contains("Indian"))
+            assertEquals(2, page.nextPage)
+        }
+
+    @Test
+    fun `a no-match query answers the site's honest empty grid`() =
         runTest {
             val client =
                 configureWith(
                     linkedMapOf(
-                        "https://alphacoders.com/asdfqwerty-wallpapers" to notFound(),
+                        "https://alphacoders.com/search/view?q=zzqwxywhatever&type=wallpaper" to
+                            ok("""<html><body><h1>No Results</h1></body></html>"""),
                     ),
                 )
 
-            val page = provider.search(query = "asdfqwerty").getOrThrow()
+            val page = provider.search(query = "zzqwxywhatever").getOrThrow()
 
             assertTrue(page.wallpapers.isEmpty())
             assertNull(page.nextPage)
-            assertEquals("https://alphacoders.com/asdfqwerty-wallpapers", client.requests.single())
+            assertEquals(
+                "https://alphacoders.com/search/view?q=zzqwxywhatever&type=wallpaper",
+                client.requests.single(),
+            )
         }
 
     @Test
-    fun `search pages ride the same pagination and end on the site's own 404`() =
+    fun `search pages ride the page parameter`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://alphacoders.com/search/view?q=indian+actress&type=wallpaper&page=2" to ok(searchGrid),
+                    ),
+                )
+
+            val page = provider.search(query = "indian actress", page = 2).getOrThrow()
+
+            assertEquals(
+                "https://alphacoders.com/search/view?q=indian+actress&type=wallpaper&page=2",
+                client.requests.single(),
+            )
+            assertEquals(3, page.nextPage)
+        }
+
+    @Test
+    fun `an empty grid past the search's end never advertises more`() =
         runTest {
             configureWith(
                 linkedMapOf(
-                    "https://alphacoders.com/naruto-wallpapers?page=2" to notFound(),
+                    "https://alphacoders.com/search/view?q=indian+actress&type=wallpaper&page=50" to
+                        ok("<html><body></body></html>"),
                 ),
             )
 
-            val page = provider.search(query = "naruto", page = 2).getOrThrow()
+            val page = provider.search(query = "indian actress", page = 50).getOrThrow()
 
             assertTrue(page.wallpapers.isEmpty())
             assertNull(page.nextPage)
+        }
+
+    @Test
+    fun `a 404 from the search endpoint is an honest miss, never a crash`() =
+        runTest {
+            configureWith(
+                linkedMapOf(
+                    "https://alphacoders.com/search/view?q=anything&type=wallpaper" to notFound(),
+                ),
+            )
+
+            val page = provider.search(query = "anything").getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+        }
+
+    @Test
+    fun `the search deep cap answers empty without a request`() =
+        runTest {
+            val client = configureWith(emptyMap())
+
+            val page = provider.search(query = "anything", page = 101).getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+            assertTrue(client.requests.isEmpty())
         }
 
     // ------------------------------------------------------------ sections
 
     @Test
-    fun `sections offer sixteen shelves with canonical slugs`() =
+    fun `sections offer sixteen shelves with search-ready presets`() =
         runTest {
             val sections = provider.sections()
 
@@ -516,23 +621,12 @@ class AlphaCodersWallpaperProviderTest {
         }
 
     @Test
-    fun `every section preset walks a real topic page`() =
+    fun `every section preset rides the site's real search`() =
         runTest {
             val client =
                 configureWith(
                     linkedMapOf(
-                        "https://alphacoders.com/nature-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/space-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/abstract-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/car-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/video-game-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/movie-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/animal-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/fantasy-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/music-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/dark-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/minimalist-wallpapers" to ok(popularGrid),
-                        "https://alphacoders.com/city-wallpapers" to ok(popularGrid),
+                        "https://alphacoders.com/search/view?q=" to ok(searchGrid),
                     ),
                 )
 
@@ -543,7 +637,7 @@ class AlphaCodersWallpaperProviderTest {
                     provider.search(query = section.filters.valuesFor("query").single()).getOrThrow()
                 }
             assertEquals(12, client.requests.size)
-            assertTrue(client.requests.all { it.endsWith("-wallpapers") })
+            assertTrue(client.requests.all { it.startsWith("https://alphacoders.com/search/view?q=") })
         }
 
     // ------------------------------------------------------------- details

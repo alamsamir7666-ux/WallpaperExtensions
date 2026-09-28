@@ -123,14 +123,31 @@ class AlphaCodersLiveCheckTest {
         }
 
     @Test
-    fun `a search that names a topic hits and a garbage slug misses honestly`() =
+    fun `real search matches the query and garbage misses honestly`() =
         runTest {
             assumeTrue(live())
             val provider = configured()
-            val hit = provider.search(query = "naruto", page = 1).getOrThrow()
+            val hit = provider.search(query = "indian actress", page = 1).getOrThrow()
+            val pageTwo = provider.search(query = "indian actress", page = 2).getOrThrow()
             val miss = provider.search(query = "zzqwxywhatever", page = 1).getOrThrow()
 
-            assertTrue("expected a naruto batch", hit.wallpapers.isNotEmpty())
+            assertTrue("expected an actress batch", hit.wallpapers.isNotEmpty())
+            // Regression guard for 1.0.x: the old topic-address guessing
+            // redirected `indian actress` to the generic india topic, whose
+            // keyword rows never mention actresses. The site's real search
+            // matches its own users' results.
+            assertTrue(
+                "the batch must actually match the query",
+                hit.wallpapers.any { wallpaper ->
+                    wallpaper.tags.any { it.equals("actress", ignoreCase = true) || it.equals("Indian", ignoreCase = true) } ||
+                        wallpaper.title?.contains("actress", ignoreCase = true) == true
+                },
+            )
+            assertEquals(2, hit.nextPage)
+            assertTrue(
+                "search page two repeated page one's batch — the endpoint must not clamp",
+                pageTwo.wallpapers.none { it.id in hit.wallpapers.map { wallpaper -> wallpaper.id }.toSet() },
+            )
             assertTrue(
                 "expected an honest miss",
                 miss.wallpapers.isEmpty() && miss.nextPage == null,

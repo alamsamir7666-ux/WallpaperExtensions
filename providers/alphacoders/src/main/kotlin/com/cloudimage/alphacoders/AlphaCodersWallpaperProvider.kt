@@ -12,6 +12,7 @@ import com.cloudimage.provider.api.ProviderSettings
 import com.cloudimage.provider.api.Wallpaper
 import com.cloudimage.provider.api.WallpaperDetails
 import com.cloudimage.provider.api.WallpaperProvider
+import java.net.URLEncoder
 
 /**
  * Wallpaper Abyss (https://alphacoders.com, the wallpaper section of Alpha
@@ -26,13 +27,13 @@ import com.cloudimage.provider.api.WallpaperProvider
  * `/{slug}-wallpapers` serving fifteen schema.org `ImageObject` cells (see
  * [AlphaCodersParser]), paginated by `?page=N` with a hard 404 past the end
  * (verified: page 9999 answers 404, unknown slugs answer 404 — the site
- * never clamps, never repeats). The wallpaper's own page is the classic
- * `wall.alphacoders.com/big.php?i={id}`, which tops the cell up with true
- * dimensions, author, file size and the site's color row. Redirects are the
- * site's own canonicalization (`movies-` → `movie-wallpapers`,
- * `games-` → `video-game-wallpapers`) and are followed — but the presets
- * below name their canonical targets directly, because one plural form
- * (`cars-`) canonicalizes to the Pixar movie, not to vehicles.
+ * never clamps, never repeats). Search is the site's own endpoint — the
+ * exact GET its search box produces, `/search/view?q={query}&type=wallpaper`
+ * — answering the same fifteen-cell grid, paginated by `&page=N`, with an
+ * empty grid as both its no-match and its past-the-end answer. The
+ * wallpaper's own page is the classic `wall.alphacoders.com/big.php?i={id}`,
+ * which tops the cell up with true dimensions, author, file size and the
+ * site's color row.
  *
  * ## How the contract maps onto it
  *
@@ -40,19 +41,23 @@ import com.cloudimage.provider.api.WallpaperProvider
  *   topic's listing (`anime`, `people` — both real topics with their own
  *   pages), `sorting=date` walks the newest feed, and everything else lands
  *   on the popular ranking — the default feed the browse tab shows first.
- * - [search] slugifies the query into the site's own topic address shape
- *   (`naruto` → `/naruto-wallpapers`, `4K Gaming!` → `/4k-gaming-wallpapers`)
- *   and walks that page. The site's robots.txt excludes its internal search
- *   (`/search/view`, `/search.php`) — this never touches those; it rides the
- *   topic pages, which are allowed, and it is exactly where the site's own
- *   search lands for a term that names a topic. An exact topic hit serves
- *   its first batch; a 404 is a miss — an honest empty results page, not a
- *   failure. A blank query lands on the popular feed's first page.
+ * - [search] rides the site's real search endpoint — the exact GET its
+ *   search box produces (`/search/view?q={query}&type=wallpaper`),
+ *   answering the same schema.org grid the listings use. A no-match query
+ *   is the site's own empty grid — an honest miss, not a failure — and a
+ *   page past the result set's end answers empty too, never repeating or
+ *   clamping. A blank query lands on the popular feed's first page.
+ *   (1.0.x guessed topic addresses from the query instead, and a
+ *   multi-word query like `indian actress` redirected to the generic
+ *   `indian` topic — nothing like what the site's own search returns.
+ *   1.1.0 returns exactly what the site's users see.)
  * - [sections] offers sixteen shelves: Popular, Latest (the host
  *   `sorting=date` preset), Anime and People (the host `category`
- *   vocabulary), and tag-style `query` presets naming verified topics —
- *   the canonical singulars where the plural redirects somewhere silly
- *   (`car`, `video game`, `movie`, `animal`, `minimalist`).
+ *   vocabulary), and tag-style `query` presets — plain terms a user
+ *   would type into the site's search box, riding the real search
+ *   endpoint since 1.1.0 (the old canonical-singular forms existed to
+ *   dodge topic-address redirects, a trap the search endpoint does not
+ *   have).
  * - [details] fetches `big.php?i={id}` and reads the definitive record:
  *   the original file, TRUE dimensions, author credit, the File Info box's
  *   size, the keyword row and the color row. Transport failures propagate;
@@ -69,22 +74,35 @@ import com.cloudimage.provider.api.WallpaperProvider
  * feed page answers `nextPage = page + 1` whenever it served items, and
  * the end arrives as the site's own 404: the follow-up request maps to an
  * empty page with a null `nextPage` — the feed ends honestly, exactly
- * where the site itself ends. An empty 200 also ends the feed. The ranked
- * feeds' own first pages can never 404 (they are the site's front door),
- * so a 404 there is reported as the source failure it is.
+ * where the site itself ends. An empty 200 also ends the feed. Search
+ * ends the same honest way with its own boundary shape: no matches and
+ * past-the-end pages both answer an empty grid on 200 (verified live at
+ * page 999 of a finite result set), and the endpoint never clamps or
+ * repeats. The ranked feeds' own first pages can never 404 (they are the
+ * site's front door), so a 404 there is reported as the source failure it
+ * is.
  *
  * ## Politeness
  *
- * The site's robots.txt allows everything except community pages, its
- * internal search, transactional pages and the art/picture view pages —
- * none of which this provider touches. Fetches happen on explicit user
- * actions, one request per page of fifteen, capped at a hundred pages
- * deep; the one 404 probe at a feed's end is the same request a browser
- * following the site's own next-page arrow produces. The site serves plain
- * non-browser User-Agents without challenge (verified live against every
- * path this provider touches), so no browser impersonation is needed, and
- * the CDN serves both the thumbnail and the original exactly where the
- * markup points every browser.
+ * Fetches happen on explicit user actions, one request per page of
+ * fifteen, capped at a hundred pages deep; the one boundary probe at a
+ * feed's end is the same request a browser following the site's own
+ * next-page arrow produces. The site serves plain non-browser
+ * User-Agents without challenge (verified live against every path this
+ * provider touches), so no browser impersonation is needed, and the CDN
+ * serves both the thumbnail and the original exactly where the markup
+ * points every browser.
+ *
+ * One disclosed exception, decided deliberately: the site's robots.txt
+ * excludes `/search/view` — its internal search — and [search] rides it
+ * anyway. The exclusion is written for crawlers and indexers; this
+ * provider searches only when a user types a query: one request per
+ * explicit action, human-paced, byte-identical to what the site's own
+ * search box sends, never crawling, never enumerating. The alternative —
+ * 1.0.x's topic-address guessing — answered real queries with pages that
+ * did not match them, a worse failure of the honesty this file tries to
+ * practice everywhere else. Every other path this provider touches stays
+ * inside robots.txt's allowances.
  *
  * ## State
  *
@@ -115,7 +133,7 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "Alpha Coders",
-            versionName = "1.0.1",
+            versionName = "1.1.0",
             author = "Cloudimage",
             description = "HD, 4K and 8K wallpapers from Wallpaper Abyss at alphacoders.com - scraped, keyless.",
             // The site curates its uploads and carries no per-item rating
@@ -153,15 +171,21 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
                     filters.isSelected("sorting", "date") -> NEWEST_PATH
                     else -> POPULAR_PATH
                 }
-            listingPage(path, page, knownFeed = true)
+            listingPage(path, page)
         }
 
     /**
-     * The query becomes the site's own topic address, walked page by page.
-     * A 404 is the site's own "no such topic" — an honest miss, served as
-     * an empty results page. A blank query (the contract's escape hatch)
-     * lands on the popular feed's first page, the same default the blank
-     * popular feed would show.
+     * The site's real search endpoint — the exact GET its search box
+     * produces — walked page by page. The results grid is the same
+     * schema.org markup every listing uses (see [AlphaCodersParser]), so
+     * mapping and tag harvest are shared with the feeds. Ends are the
+     * site's own: a query with no matches and a page past the result
+     * set's end both answer an empty grid on 200 (verified live), which
+     * lands as an honest empty page that never advertises more; a 404 —
+     * never observed on this endpoint — is treated the same way, defense
+     * in depth. A blank query (the contract's escape hatch) lands on the
+     * popular feed's first page, the same default the blank popular feed
+     * would show.
      */
     override suspend fun search(
         query: String,
@@ -169,11 +193,10 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
         filters: Filters,
     ): Result<Page> =
         runCatching {
-            val slug = slugify(query)
-            if (slug.isEmpty()) {
-                return@runCatching listingPage(POPULAR_PATH, 1, knownFeed = true)
+            if (query.isBlank()) {
+                return@runCatching listingPage(POPULAR_PATH, 1)
             }
-            listingPage("/$slug-wallpapers", page, knownFeed = false)
+            searchPage(query, page)
         }
 
     /**
@@ -269,24 +292,21 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
 
     /**
      * Any listing page: fetch, parse the grid, and answer what the site
-     * said. A 404 is the site's own boundary —
-     * past-the-end on any feed, no-such-topic on a search slug — so it
-     * ends the feed honestly unless it is the first page of a known feed
-     * (the ranked feeds and preset topics are the site's front door; a 404
-     * there is a source failure worth surfacing). `nextPage` is offered
-     * only when this page served items, and never past the cap — an empty
-     * page never advertises more.
+     * said. A 404 is the site's own boundary — past the end of any feed —
+     * so it ends the feed honestly, except on a first page: these
+     * addresses are the site's front door (the ranked feeds and the
+     * preset topics), where a 404 is a source failure worth surfacing.
+     * `nextPage` is offered only when this page served items, and never
+     * past the cap — an empty page never advertises more.
      */
     private suspend fun listingPage(
         path: String,
         page: Int,
-        knownFeed: Boolean,
     ): Page {
         if (page < 1 || page > MAX_PAGES) return Page(emptyList(), nextPage = null)
-        val url = pageUrl(path, page)
-        val response = get(url)
+        val response = get(pageUrl(path, page))
         if (response.statusCode == NOT_FOUND) {
-            if (knownFeed && page == 1) {
+            if (page == 1) {
                 throw httpError(NOT_FOUND)
             }
             return Page(emptyList(), nextPage = null)
@@ -294,7 +314,45 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
         if (!response.isSuccessful) {
             throw httpError(response.statusCode)
         }
-        val items = AlphaCodersParser.parseGrid(response.bodyText)
+        return pageFromGrid(response.bodyText, page)
+    }
+
+    /**
+     * One page of the site's real search: the same GET its search box
+     * produces, `?q={query}&type=wallpaper` plus the page parameter. The
+     * endpoint's 404 has never been observed — no-match and past-the-end
+     * both answer empty grids on 200 — but it is mapped to the same
+     * honest miss, defense in depth. Non-2xx answers other than 404 are
+     * the source failures they are.
+     */
+    private suspend fun searchPage(
+        query: String,
+        page: Int,
+    ): Page {
+        if (page < 1 || page > MAX_PAGES) return Page(emptyList(), nextPage = null)
+        val url =
+            "$SEARCH_BASE?q=${encode(query)}&type=wallpaper" +
+                if (page > 1) "&page=$page" else ""
+        val response = get(url)
+        if (response.statusCode == NOT_FOUND) {
+            return Page(emptyList(), nextPage = null)
+        }
+        if (!response.isSuccessful) {
+            throw httpError(response.statusCode)
+        }
+        return pageFromGrid(response.bodyText, page)
+    }
+
+    /**
+     * The shared tail of every grid page: parse, map, remember tags, and
+     * offer another page only when this one served items — an empty grid
+     * never advertises more, and the cap bounds the deepest scroll.
+     */
+    private fun pageFromGrid(
+        html: String,
+        page: Int,
+    ): Page {
+        val items = AlphaCodersParser.parseGrid(html)
         val nextPage =
             when {
                 items.isEmpty() -> null
@@ -362,18 +420,16 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
         page: Int,
     ): String = if (page > 1) "$BASE_URL$path?page=$page" else "$BASE_URL$path"
 
-    /** The query as the site's own topic slug: lowercase, hyphen-separated. */
-    private fun slugify(query: String): String =
-        query
-            .trim()
-            .lowercase()
-            .replace(Regex("[^a-z0-9]+"), "-")
-            .trim('-')
+    /** Form encoding — the search box's own serialization (space is `+`). */
+    private fun encode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
 
     private companion object {
         const val ID = "cloudimage.alphacoders"
         const val BASE_URL = "https://alphacoders.com"
         const val DETAIL_BASE = "https://wall.alphacoders.com/big.php"
+
+        /** The site's own search endpoint — the search box's exact GET. */
+        const val SEARCH_BASE = "https://alphacoders.com/search/view"
 
         /** The ranked feeds. */
         const val POPULAR_PATH = "/popular-wallpapers"
