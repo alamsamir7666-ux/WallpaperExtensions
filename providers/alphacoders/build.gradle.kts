@@ -3,11 +3,14 @@ plugins {
 }
 
 dependencies {
-    // The default-dispatcher parse hop only: 250-KB listing pages belong
-    // off the caller's (main) thread, and the suspend machinery needs the
-    // coroutines core at compile time. d8 dexes against the runtime
-    // classpath, so these classes stay out of the payload and resolve from
-    // the host classloader at load time — the app ships the same coroutines
-    // version (1.9.0) this compiles against.
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    // Deliberately empty, and it must stay that way. A plugin payload's
+    // runtime ABI is exactly provider:api + kotlin-stdlib +
+    // kotlinx.serialization — the packages the app's R8 config keeps
+    // unrenamed for its DexClassLoader (see the app repo's
+    // proguard-rules.pro). Anything else compiles, passes JVM tests (where
+    // the full classpath is present) and then dies on the release APK with
+    // NoClassDefFoundError the moment R8 renames it: 1.0.0 shipped exactly
+    // that bug, dexing a kotlinx-coroutines reference that no release build
+    // could resolve. Tests may use testImplementation freely — test classes
+    // never enter the payload.
 }

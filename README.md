@@ -36,7 +36,7 @@ whose listings disclose the original file itself, right in the grid.
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.alphacoders` | 1.0.0 | 19 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.alphacoders` | 1.0.1 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -303,9 +303,13 @@ lines plus 900 lines of tests):
   The site serves plain non-browser User-Agents without challenge
   (verified live against every path touched), and the image CDN serves
   the thumbnail and original exactly where the markup points every
-  browser. The 250-KB listing pages parse on the default dispatcher —
-  the host fires a source's every section first page at once, and those
-  parses belong off the UI thread.
+  browser. The 250-KB listing pages parse inline on the caller's
+  dispatcher — the same model as the other three scrapers — because the
+  plugin ABI exposes no coroutine machinery to payload code (1.0.0
+  shipped a `withContext(Dispatchers.Default)` hop that no release APK
+  could bind; 1.0.1 parses inline, and the single-pass regex scan stays
+  cheap while the host's HTTP facade keeps the network off the main
+  thread).
 - **Verified.** 25 unit tests from real captured markup (the full
   schema.org cell with its duplicated keywords and boilerplate tail,
   empty- and filled-name cells, flipped meta attribute order, malformed-

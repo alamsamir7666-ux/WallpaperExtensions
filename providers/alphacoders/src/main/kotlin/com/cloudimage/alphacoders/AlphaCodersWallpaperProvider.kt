@@ -12,8 +12,6 @@ import com.cloudimage.provider.api.ProviderSettings
 import com.cloudimage.provider.api.Wallpaper
 import com.cloudimage.provider.api.WallpaperDetails
 import com.cloudimage.provider.api.WallpaperProvider
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
  * Wallpaper Abyss (https://alphacoders.com, the wallpaper section of Alpha
@@ -101,10 +99,14 @@ import kotlinx.coroutines.withContext
  * height="219"` attrs are the site's uniform card crop, identical on every
  * cell and true of no wallpaper (a 3840x2400 original and a 2205x1080 one
  * both arrive labeled 350x219). [details] is where the TRUE resolution
- * arrives. Listing pages are a quarter megabyte of HTML each, and the host
- * fires a source's every section first page at once, so parsing hops to
- * [Dispatchers.Default] — sixteen regex parses belong on the default
- * dispatcher, not the UI thread.
+ * arrives. Parsing runs inline on the caller's dispatcher, like every
+ * other provider in this set: the payload ABI (provider:api +
+ * kotlin-stdlib + kotlinx.serialization — the packages the app keeps
+ * unrenamed for its DexClassLoader) exposes no coroutine machinery to
+ * plugin code, so a dispatcher hop is not a plugin's to make. The cost is
+ * bounded anyway: [AlphaCodersParser] is a single-pass regex scan, and the
+ * host's HTTP facade already moves the network itself off the main
+ * thread.
  */
 class AlphaCodersWallpaperProvider : WallpaperProvider {
     private var httpClient: ProviderHttpClient? = null
@@ -113,7 +115,7 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "Alpha Coders",
-            versionName = "1.0.0",
+            versionName = "1.0.1",
             author = "Cloudimage",
             description = "HD, 4K and 8K wallpapers from Wallpaper Abyss at alphacoders.com - scraped, keyless.",
             // The site curates its uploads and carries no per-item rating
@@ -234,7 +236,7 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
             if (!response.isSuccessful) {
                 throw httpError(response.statusCode)
             }
-            val record = parseDetailOffMain(response.bodyText) ?: error("unrecognized wallpaper page for '$id'")
+            val record = AlphaCodersParser.parseDetail(response.bodyText) ?: error("unrecognized wallpaper page for '$id'")
             WallpaperDetails(
                 wallpaper =
                     Wallpaper(
@@ -266,8 +268,8 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
     // ---------------------------------------------------------------- feed
 
     /**
-     * Any listing page: fetch, parse the grid off the caller's dispatcher,
-     * and answer what the site said. A 404 is the site's own boundary —
+     * Any listing page: fetch, parse the grid, and answer what the site
+     * said. A 404 is the site's own boundary —
      * past-the-end on any feed, no-such-topic on a search slug — so it
      * ends the feed honestly unless it is the first page of a known feed
      * (the ranked feeds and preset topics are the site's front door; a 404
@@ -292,7 +294,7 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
         if (!response.isSuccessful) {
             throw httpError(response.statusCode)
         }
-        val items = parseGridOffMain(response.bodyText)
+        val items = AlphaCodersParser.parseGrid(response.bodyText)
         val nextPage =
             when {
                 items.isEmpty() -> null
@@ -308,7 +310,7 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
         if (!response.isSuccessful) {
             throw httpError(response.statusCode)
         }
-        return parseGridOffMain(response.bodyText).map(::gridWallpaper).let(::rememberTagsIn)
+        return AlphaCodersParser.parseGrid(response.bodyText).map(::gridWallpaper).let(::rememberTagsIn)
     }
 
     // ------------------------------------------------------------- mapping
@@ -367,14 +369,6 @@ class AlphaCodersWallpaperProvider : WallpaperProvider {
             .lowercase()
             .replace(Regex("[^a-z0-9]+"), "-")
             .trim('-')
-
-    /** A listing page's grid, parsed off the caller's dispatcher (see threading). */
-    private suspend fun parseGridOffMain(html: String): List<AlphaCodersParser.GridItem> =
-        withContext(Dispatchers.Default) { AlphaCodersParser.parseGrid(html) }
-
-    /** The detail page's record, parsed off the caller's dispatcher. */
-    private suspend fun parseDetailOffMain(html: String): AlphaCodersParser.DetailRecord? =
-        withContext(Dispatchers.Default) { AlphaCodersParser.parseDetail(html) }
 
     private companion object {
         const val ID = "cloudimage.alphacoders"
