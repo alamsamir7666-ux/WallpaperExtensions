@@ -36,7 +36,7 @@ their files' TRUE dimensions right in the grid, verified pixel-exact.
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.wallpaperaccess` | 1.3.0 | 19 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpaperaccess` | 1.4.0 | 15 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -108,7 +108,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 └── src/…                    parser + provider + 34 unit tests
 providers/hdqwalls/          the second extension, same layout (21 tests)
 providers/wallpapers4k/      the third extension, same layout (19 tests)
-providers/wallpaperaccess/   the fourth extension, same layout (41 tests)
+providers/wallpaperaccess/   the fourth extension, same layout (25 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -259,7 +259,7 @@ tests):
 
 The fourth scraper, built for a collection-first site with a rare gift:
 its listings publish each file's TRUE dimensions right in the grid
-(~1,080 source lines plus 1,500 lines of tests):
+(~600 source lines plus 850 lines of tests):
 
 - **True dimensions, zero requests.** Every wallpaper cell carries
   `data-or="3840x2160"` — the file's own dimensions — verified
@@ -268,27 +268,17 @@ its listings publish each file's TRUE dimensions right in the grid
   round-trip: the info sheet shows real resolutions from the listing
   alone, portrait stays portrait (736x1389 parses exactly that), and
   the host's v1.0.21 viewer never even needs to ask.
-- **One page, whole collection — then the theme walk.** The site
+- **One page, whole collection — then it ends, honestly.** The site
   paginates NOTHING — `/most-popular`, `/new` and every collection
   (`/fall`, `/naruto`, `/4k-gaming`, …) serves its entire inventory,
-  twenty to a hundred items, in one server-rendered page. The endless
-  scroll therefore continues through OTHER collections, chosen the
-  honest way for each root: themed tabs (Nature, Space, Anime, search
-  hits) walk their SAME-THEME siblings — the collections the site's own
-  public `sitemap.xml` enumerates, matched by token boundary (`fall`
-  matches `fall-leaves`, never `waterfall`) — so the Nature tab stays
-  nature; the two ranked mixed feeds (Popular, Latest) ride the Related
-  Wallpapers band, the site's own cross-theme "keep browsing"
-  recommendations, honest for a mixed feed. A walked page that brings
-  NO wallpapers — the collection 404s, or answers 200 with a body that
-  carries no cells — ends the walk with `nextPage` null, never an empty
-  page that still claims more: that empty-but-keep-scrolling answer is
-  exactly the stall 1.3.0 removed. An unreadable sitemap is a retryable
-  error that goes quiet for a minute before the next attempt — reported
-  to the host's retry footer, never a silent session-long end, and never
-  a request storm. A root whose address names no theme word (`4k`,
-  `wallpapers`, digits only) never offers page two at all. The sitemap
-  is read once per session, whatever the tab count.
+  twenty to a hundred items, in one server-rendered page — so every
+  tab serves that one batch and answers `nextPage` null. Deeper pages
+  answer empty without a request. (1.4.0 is a behavioral revert to
+  1.0.0: the endless-scroll walks that shipped in 1.1.0–1.3.0 — first
+  the site's mixed Related band, then same-theme sitemap siblings —
+  were reported stalling themed tabs mid-scroll in the app, so the
+  walk machinery came out wholesale in favor of the version users
+  never reported a problem against.)
 - **Previews and originals by directory.** Cells disclose
   `data-fullimg="/full/{id}.{ext}"` — the original file served directly
   — and the same filename under `/thumb/` is the site's lighter
@@ -306,42 +296,23 @@ its listings publish each file's TRUE dimensions right in the grid
   ride the host's `category` values — both real collections here; and
   Nature, Space, Abstract, Cars, Games, Movies, Animals, Fantasy,
   Music, Dark, Minimal and City are tag-style `query` presets naming
-  real collections (all verified live, 27–104 items each) — each
-  continuing, as the scroll deepens, into its own same-theme siblings.
-  (1.2.0: the theme walk replaced the mixed Related-band walk the
-  themed tabs rode in 1.1.0, which drifted a Nature tab into space
-  wallpapers mid-scroll — the band stays reserved for the two ranked
-  mixed feeds, where cross-theme is the honest continuation.)
-  (1.3.0: the walk contract grew teeth after the themed tabs were
-  reported stalling mid-scroll — a page that brings nothing now ends
-  its walk instead of freezing the feed, and a Cloudflare-refused
-  sitemap surfaces as a retryable error with a one-minute cooldown
-  instead of silently ending every themed tab for the session.)
+  real collections (all verified live, 27–104 items each).
 - **Details re-walk the listing.** The id IS the re-fetch address,
   `collection/fileName`, so `details()` re-serves the cell's own record
   — original, true dimensions, alt-derived title, owning collection as
   tag — with the site's own share URL (`collection#id`) as the source
   link. No author, no file size: honest nulls, never inventions.
-- **Verified.** 45 unit tests from real captured markup (both img
+- **Verified.** 25 unit tests from real captured markup (both img
   flavors — `src` and lazy `data-src`, attribute-order shuffles, the
   newline-spanning `data-download` value, malformed-cell isolation,
   404 and homepage-card shapes, entity-escaped titles, duplicate-cell
-  insurance, slugify, the related-band walk with warm and cold caches,
-  dead-card and zero-cell walk ends, band exhaustion,
-  self-link/non-collection/duplicate pruning, the sitemap walk —
-  theme-token stripping, token-boundary matching, the never-off-theme
-  regression, single-read caching, honest ends for empty themes,
-  retryable sitemap failures with their one-minute quiet, and the
-  no-theme root that never offers page two) plus a gated
-  `WallpaperAccessLiveCheckTest`
+  insurance, slugify, single-page honesty, host-vocabulary routing,
+  detail records) plus a gated `WallpaperAccessLiveCheckTest`
   (`WALLPAPERACCESS_LIVE=1`): the popular batch with dimensions on
   every item, `data-or` against the file's own pixels, the lighter
-  thumb, fresh and category listings, the related walk serving a real
-  second batch from a sibling collection, the themed Nature tab
-  staying on theme through deep scroll pages, the Anime tab's deep
-  pages staying on theme without ever stalling, slug-guess hit and
-  honest miss, details round-trip, and a portrait-shape guard — all
-  green against the live site.
+  thumb, fresh and category listings, slug-guess hit and honest
+  miss, details round-trip, and a portrait-shape guard — all green
+  against the live site.
 
 ## Publishing (CI)
 

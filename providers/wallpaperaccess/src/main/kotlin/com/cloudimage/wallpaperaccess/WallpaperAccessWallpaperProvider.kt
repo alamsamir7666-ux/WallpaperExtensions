@@ -33,19 +33,8 @@ import com.cloudimage.provider.api.WallpaperProvider
  * adds `data-slug` (the owning collection) and an `alt` titled
  * `WxH Title`. The same filename under `/thumb/` is the site's lighter
  * 600-pixel preview, fifteen-for-fifteen across six listings live. There
- * is no pagination anywhere — `?page=2` serves the identical page — so a
- * listing's batch IS its whole inventory, and the endless scroll
- * continues through OTHER collections, in one of two honest ways:
- * themed roots (the tab presets, the host categories, search hits) walk
- * the SAME-THEME sibling collections the site's own public sitemap
- * enumerates, while the two ranked feeds — cross-theme by nature — ride
- * the Related Wallpapers band every listing ends with, the site's own
- * "keep browsing" recommendations for exactly that browsing mood. A
- * themed root never rides that band: its cards are whatever the site
- * cares to recommend (the live nature band runs ocean, summer, spring,
- * easter, GALAXY, technology, windows, car, winter-nature), which is how
- * a Nature tab would come to serve space wallpapers mid-scroll. Unknown
- * collection addresses answer a clean 404.
+ * is NO pagination anywhere — `?page=2` serves the identical page — and
+ * unknown collection addresses answer a clean 404.
  *
  * ## How the contract maps onto it
  *
@@ -53,32 +42,25 @@ import com.cloudimage.provider.api.WallpaperProvider
  *   walks that collection (`anime`, `people` — both real collections on
  *   this site), `sorting=date` walks the fresh feed `/new`, and everything
  *   else lands on the popular ranking, the default feed the browse tab
- *   shows first. The two ranked feeds then continue through the site's
- *   own Related Wallpapers band — mixed-theme by design, honest there;
- *   a themed category continues through its same-theme siblings from
- *   the sitemap instead, one collection per scroll, until the theme
- *   runs out and the grid ends the same way the site's own pages do.
+ *   shows first. Because the site has no pagination, every feed answers
+ *   with its single batch and `nextPage` null — the grid just ends, the
+ *   same way the site's own pages do.
  * - [search] never touches the site's `/search` — its robots.txt excludes
  *   it. Instead the query is slugified into the site's own collection
  *   address shape and walked: `naruto` → `/naruto`, `4K Gaming!` →
  *   `/4k-gaming` (both verified live). An exact collection hit serves its
- *   whole batch, then walks the same-theme siblings of that query —
- *   `naruto` walks the sitemap's naruto collections, `nature` its nature
- *   ones — the "more like this" the site's own catalog holds. An unknown
- *   address answers 404, which this provider reports as an honest empty
- *   results page — a miss, not a failure, seeding no walk. A blank query
- *   (the contract's escape hatch) lands on the popular feed, the same
- *   default the blank popular feed would show, and rides its band from
- *   there.
+ *   whole batch; an unknown address answers 404, which this provider
+ *   reports as an honest empty results page — a miss, not a failure.
+ *   Deeper pages answer honestly empty. A blank query (the contract's
+ *   escape hatch) lands on the popular feed's first page, the same default
+ *   the blank popular feed would show.
  * - [sections] offers sixteen shelves: Popular, Latest (the host
  *   `sorting=date` preset over `/new`), Anime and People (the host
  *   `category` vocabulary), and twelve tag-style `query` presets —
  *   Nature, Space, Abstract, Cars, Games, Movies, Animals, Fantasy,
  *   Music, Dark, Minimal, City — each naming a real collection the
  *   slug-guess search addresses exactly (all verified live, twenty-seven
- *   to a hundred and four items each), and each walking its own
- *   same-theme siblings as the scroll deepens: the Nature tab stays
- *   nature, the Space tab stays space.
+ *   to a hundred and four items each).
  * - [details] re-walks the listing the item came from — the id IS that
  *   pair, `collection/fileName` — and answers the cell's own record: the
  *   original URL, the TRUE dimensions from `data-or`, the alt-derived
@@ -97,19 +79,9 @@ import com.cloudimage.provider.api.WallpaperProvider
  * provider touches neither: originals are read from the cell's own
  * `data-fullimg` attribute, search rides collection pages at their public
  * slug addresses, the same links the site's own navigation serves every
- * visitor. The sitemap is read once per provider instance — the one
- * surface the site publishes precisely for automated readers, a single
- * request no matter how many tabs the session scrolls — and a sitemap
- * the site refuses or serves unreadable goes quiet for a full minute
- * before the next attempt, so one bad moment cannot become a retry
- * storm. Page one of a
- * feed costs one request returning the whole batch — a browser tab on
- * the same page costs the same; each deeper page costs one or two (the
- * walked collection, plus the root band or sitemap when this instance
- * has not yet seen it) — a browser user clicking through the site's own
- * links spends the same. Fetches happen only on explicit user actions,
- * and the walk never revisits a collection it has already served.
- * Preview and original image URLs are fetched
+ * visitor. Every listing is ONE request returning the whole batch — a
+ * browser tab on the same page costs the same — and fetches happen only
+ * on explicit user actions. Preview and original image URLs are fetched
  * only by the app's image pipeline when it renders or downloads an item,
  * exactly as the site's own markup directs every browser. The site serves
  * plain non-browser User-Agents without challenge (verified live against
@@ -119,14 +91,10 @@ import com.cloudimage.provider.api.WallpaperProvider
  * ## State
  *
  * The contract asks plugins to be stateless; the only mutable state is
- * optional caches that never gate correctness — the collection-name pool
- * feeding [suggestTags], the related-band cache feeding the ranked
- * walks, the sitemap cache feeding the theme walks, and the minute of
- * quiet a refused sitemap keeps to stop retry storms. A fresh instance
- * answers identically, at worst re-fetching a root band or the sitemap it
- * has not seen (one extra request, self-healing) or without suggestions.
- * All caches are guarded by one lock; sections load in parallel on the
- * host side.
+ * the collection-name pool feeding [suggestTags] — a bonus, never a
+ * dependency. A fresh instance answers identically, at worst without
+ * suggestions. The pool is guarded by one lock; sections load in parallel
+ * on the host side.
  *
  * ## Dimensions
  *
@@ -144,7 +112,12 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperAccess",
-            versionName = "1.3.0",
+            // 1.4.0 is a behavioral revert: the code below is 1.0.0's,
+            // restored wholesale after the endless-scroll walks (1.1.0's
+            // related band, 1.2.0/1.3.0's sitemap siblings) were reported
+            // stalling themed tabs in the app. The version code rides
+            // above 1.3.0 so installed devices accept the downgrade.
+            versionName = "1.4.0",
             author = "Cloudimage",
             description = "HD, 4K and up wallpapers from wallpaperaccess.com - scraped, keyless.",
             // The site curates its collections and carries no per-item
@@ -167,10 +140,8 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
      * The default feed, ridden through the host vocabulary: a recognized
      * `category` walks that collection's page, `sorting=date` walks the
      * fresh feed, and everything else lands on the popular ranking.
-     * The two ranked feeds continue through the site's Related Wallpapers
-     * band (mixed-theme, honest for a mixed feed); a themed category
-     * continues through its same-theme sitemap siblings. Category wins
-     * over sorting: it is the primary axis of the site's content.
+     * Category wins over sorting: it is the primary axis of the site's
+     * content. Page one is the whole batch — the site paginates nothing.
      */
     override suspend fun popular(
         page: Int,
@@ -191,10 +162,11 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
      * hits `/naruto`, `4K Gaming!` hits `/4k-gaming`. An unknown address
      * answers 404, which is a miss, not a failure: the honest answer is
      * an empty results page, exactly what the site's own no-results
-     * moment looks like, and no walk is seeded from it. A hit serves its
-     * whole batch, then walks the query's same-theme siblings on deeper
-     * pages. A blank query (the contract's escape hatch) lands on the
-     * popular feed, the same default the blank popular feed would show.
+     * moment looks like. The site has no pagination, so page one is the
+     * whole batch and deeper pages answer honestly empty without a
+     * request. A blank query (the contract's escape hatch) lands on the
+     * popular feed's first page, the same default the blank popular feed
+     * would show.
      */
     override suspend fun search(
         query: String,
@@ -202,8 +174,19 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         filters: Filters,
     ): Result<Page> =
         runCatching {
-            val root = WallpaperAccessParser.slugify(query).ifEmpty { POPULAR_SLUG }
-            listingPage(root, page, rootNotFoundIsMiss = true)
+            val slug = WallpaperAccessParser.slugify(query)
+            if (slug.isEmpty()) {
+                return@runCatching listingPage(POPULAR_SLUG, 1)
+            }
+            if (page != 1) return@runCatching Page(emptyList(), nextPage = null)
+            val url = "$BASE_URL/$slug"
+            val response = get(url)
+            when {
+                response.isSuccessful -> Page(gridWallpapers(response.bodyText, slug), nextPage = null)
+                // No such collection — a search miss, not a source error.
+                response.statusCode == 404 -> Page(emptyList(), nextPage = null)
+                else -> throw httpError(response.statusCode)
+            }
         }
 
     /**
@@ -312,212 +295,21 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
     // ---------------------------------------------------------------- feed
 
     /**
-     * Any listing feed, walked page by page. Page one is the root
-     * listing's whole batch — the site paginates nothing, one page IS
-     * the collection's entire inventory. Deeper pages continue through
-     * other collections, chosen the honest way for each root: the two
-     * ranked feeds (`most-popular`, `new`) are cross-theme by nature, so
-     * they ride the root's Related Wallpapers band — the site's own
-     * mixed "keep browsing" recommendations, one per page in the site's
-     * own order; every themed root (tab presets, host categories, search
-     * hits) walks its SAME-THEME siblings from the site's public sitemap
-     * — the Nature tab stays nature, the Space tab stays space. A walked
-     * page that brings NO wallpapers — the collection 404s, or answers
-     * 200 with a body that carries no cells — ends the walk with
-     * `nextPage` null, never an empty page that still offers more: the
-     * host's pager would wait on content that never comes, and the tab
-     * would stall exactly the way 1.2.0's users saw. Any other failure
-     * is the source error it is, answered to the host's retry footer.
-     * The walked collection's own slug rides in every item's id, so
-     * [details] re-walks the listing the item actually came from.
+     * Any listing page, page one only: the site paginates NOTHING —
+     * `?page=2` serves the identical page — so the feed answers with its
+     * single batch and `nextPage` null, and deeper pages answer honestly
+     * empty WITHOUT a request, the same guard the capped scrapers use.
      */
     private suspend fun listingPage(
-        rootSlug: String,
+        slug: String,
         page: Int,
-        rootNotFoundIsMiss: Boolean = false,
     ): Page {
-        if (page < 1) return Page(emptyList(), nextPage = null)
-        val ranked = rootSlug in RANKED_SLUGS
-        if (page == 1) {
-            val response = get("$BASE_URL/$rootSlug")
-            return when {
-                response.isSuccessful -> {
-                    val html = response.bodyText
-                    val batch = gridWallpapers(html, rootSlug)
-                    when {
-                        // A ranked feed's band is its own recommendation
-                        // of what to browse next — an honest continuation
-                        // for a mixed feed, and the walk only starts when
-                        // the site actually offers one.
-                        ranked ->
-                            Page(
-                                batch,
-                                nextPage =
-                                    if (rememberRelated(rootSlug, html).isEmpty()) null else 2,
-                            )
-                        // A themed root's continuation is its same-theme
-                        // siblings; the sitemap is read lazily on the
-                        // first deeper page, so opening a tab costs exactly
-                        // one request. The optimistic `nextPage` is
-                        // resolved there: a theme with no siblings ends
-                        // the feed with an honest empty page, an
-                        // unreadable sitemap is reported as the retryable
-                        // error it is, and a root batch of zero cells has
-                        // nothing to continue from at all. A root whose
-                        // address names no theme word (`4k`, `wallpapers`,
-                        // digits only) can never walk: the offer is never
-                        // made, so no page two is requested just to hear it.
-                        else -> {
-                            val walkable =
-                                batch.isNotEmpty() &&
-                                    WallpaperAccessParser.themeTokensOf(rootSlug).isNotEmpty()
-                            Page(
-                                batch,
-                                nextPage = if (walkable) 2 else null,
-                            )
-                        }
-                    }
-                }
-                // A search address that does not exist is a miss; a broken
-                // default feed is a source error. The caller picks.
-                rootNotFoundIsMiss && response.statusCode == 404 -> Page(emptyList(), nextPage = null)
-                else -> throw httpError(response.statusCode)
-            }
+        if (page != 1) return Page(emptyList(), nextPage = null)
+        val response = get("$BASE_URL/$slug")
+        if (!response.isSuccessful) {
+            throw httpError(response.statusCode)
         }
-        val walk = if (ranked) relatedListOf(rootSlug) else siblingListOf(rootSlug)
-        val index = page - 2
-        if (index >= walk.size) return Page(emptyList(), nextPage = null)
-        val target = walk[index]
-        val more = index + 1 < walk.size
-        val response = get("$BASE_URL/$target")
-        return when {
-            response.isSuccessful -> {
-                val batch = gridWallpapers(response.bodyText, target)
-                // A 200 whose body carries no wallpaper cells is not a
-                // listing — challenge leftovers, a redesigned page — and
-                // the walk ends rather than stalling the feed with an
-                // empty page that still claims more.
-                if (batch.isEmpty()) {
-                    Page(emptyList(), nextPage = null)
-                } else {
-                    Page(batch, nextPage = if (more) page + 1 else null)
-                }
-            }
-            // The site's own link points at a page it no longer serves:
-            // the content is gone and the walk ends. An empty page that
-            // still advertised a next page froze the host's tab in place
-            // — 1.2.0's stall, never again.
-            response.statusCode == 404 -> Page(emptyList(), nextPage = null)
-            else -> throw httpError(response.statusCode)
-        }
-    }
-
-    /**
-     * The root's related band — from the cache when this instance has
-     * already seen the listing, refetched when it has not (a fresh
-     * instance resuming mid-scroll heals itself with one extra request).
-     * A root that no longer answers 404 ends the walk honestly: empty
-     * band, no error — the feed simply ends where the site ends it. Any
-     * other failure propagates as a source error, per the facade
-     * contract.
-     */
-    private suspend fun relatedListOf(rootSlug: String): List<String> {
-        synchronized(lock) { relatedCache[rootSlug] }?.let { return it }
-        val response = get("$BASE_URL/$rootSlug")
-        if (response.statusCode == 404) return emptyList()
-        if (!response.isSuccessful) throw httpError(response.statusCode)
-        return rememberRelated(rootSlug, response.bodyText)
-    }
-
-    /**
-     * A themed root's same-theme siblings, from the site's public
-     * sitemap — the one surface where the site enumerates its collections
-     * in bulk, read once per provider instance and filtered to the
-     * addresses whose tokens name the root's own theme: `nature` walks
-     * `nature-path`, `birds-in-nature`, `beautiful-nature-scenery`, …;
-     * `space` walks `space-opera`, `space-jellyfish`, … — never the
-     * mixed-theme cards a Related band would deal. A root whose address
-     * names no theme word (`4k`, `wallpaper`, digits only) cannot walk
-     * honestly, and its feed ends after its batch. A sitemap the site
-     * refuses or serves unreadable raises a RETRYABLE source error
-     * instead of a silent end: the tab already holds its root batch, the
-     * host's error footer offers the retry, and the failure's minute of
-     * quiet keeps that retry from hammering a host that just said no —
-     * 1.2.0 answered this by ending every themed tab for the whole
-     * session, which is how its users lost their feeds.
-     */
-    private suspend fun siblingListOf(rootSlug: String): List<String> {
-        synchronized(lock) { siblingCache[rootSlug] }?.let { return it }
-        val tokens = WallpaperAccessParser.themeTokensOf(rootSlug)
-        if (tokens.isEmpty()) return emptyList()
-        val siblings =
-            sitemapSlugs()
-                .filter { it != rootSlug && WallpaperAccessParser.matchesTheme(it, tokens) }
-        synchronized(lock) {
-            if (siblingCache.size < RELATED_CACHE_LIMIT) siblingCache[rootSlug] = siblings
-        }
-        return siblings
-    }
-
-    /**
-     * The sitemap's collection addresses — fetched once per instance and
-     * cached on a successful read. The sitemap is the site's own
-     * publication surface for automated readers; one request per session,
-     * no matter how many tabs scroll. A read that fails — refused,
-     * challenged, or a 200 whose body carries no collections — is never
-     * cached as the session's truth: it raises the retryable source
-     * error the host's footer knows how to offer again, and the failure
-     * is remembered for [SITEMAP_RETRY_COOLDOWN_MS] so one bad moment
-     * costs a single request, not a request per retry per tab.
-     */
-    private suspend fun sitemapSlugs(): List<String> {
-        synchronized(lock) {
-            sitemapCache?.let { return it }
-            if (sitemapRetryAt != 0L && System.currentTimeMillis() < sitemapRetryAt) {
-                throw sitemapUnavailable()
-            }
-        }
-        val response = get(SITEMAP_URL)
-        val slugs =
-            if (response.isSuccessful) {
-                WallpaperAccessParser.parseSitemap(response.bodyText)
-            } else {
-                emptyList()
-            }
-        if (!response.isSuccessful || slugs.isEmpty()) {
-            synchronized(lock) {
-                sitemapRetryAt = System.currentTimeMillis() + SITEMAP_RETRY_COOLDOWN_MS
-            }
-            throw sitemapUnavailable()
-        }
-        synchronized(lock) {
-            sitemapCache = slugs
-            sitemapRetryAt = 0L
-        }
-        return slugs
-    }
-
-    /** The retryable answer for a sitemap this instance cannot read. */
-    private fun sitemapUnavailable(): IllegalStateException =
-        IllegalStateException(
-            "wallpaperaccess sitemap is unreadable — the themed continuation is unavailable",
-        )
-
-    /**
-     * Parses and caches a listing's related band. The cache is a cost
-     * saver, never a correctness dependency: capped, lock-guarded, and
-     * silently skipped when full — the walk refetches the root band
-     * instead, one extra request, and answers identically.
-     */
-    private fun rememberRelated(
-        rootSlug: String,
-        html: String,
-    ): List<String> {
-        val related = WallpaperAccessParser.parseRelated(html, self = rootSlug)
-        synchronized(lock) {
-            if (relatedCache.size < RELATED_CACHE_LIMIT) relatedCache[rootSlug] = related
-        }
-        return related
+        return Page(gridWallpapers(response.bodyText, slug), nextPage = null)
     }
 
     /** The fresh batch — the `/new` feed the site labels New Wallpapers. */
@@ -591,17 +383,6 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         const val FRESH_SLUG = "new"
 
         /**
-         * The roots that are ranked MIXED feeds rather than themes — the
-         * only two listings whose deeper pages ride the Related Wallpapers
-         * band. Every other root is a themed collection and walks its
-         * same-theme sitemap siblings instead.
-         */
-        val RANKED_SLUGS = setOf(POPULAR_SLUG, FRESH_SLUG)
-
-        /** The site's public sitemap — its bulk enumeration of collections. */
-        const val SITEMAP_URL = "$BASE_URL/sitemap.xml"
-
-        /**
          * The host `category` vocabulary this provider can express: `anime`
          * and `people` are real collections on this site. `general` needs
          * no mapping: it is the default feed.
@@ -616,38 +397,9 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         const val TAG_POOL_LIMIT = 200
         const val TAG_SUGGESTION_LIMIT = 8
 
-        /**
-         * The related-band cache's bound — one root per tab or query in
-         * play, with room to spare for a long browsing session.
-         */
-        const val RELATED_CACHE_LIMIT = 32
-
-        /**
-         * How long a refused or unreadable sitemap stays quiet before
-         * the next attempt — matched to the host's own Cloudflare
-         * failure cooldown, so both layers recover together.
-         */
-        const val SITEMAP_RETRY_COOLDOWN_MS = 60_000L
-
-        /** One lock over the pools; sections load in parallel. */
+        /** One lock over the pool; sections load in parallel. */
         val lock = Any()
     }
 
     private val slugPool = LinkedHashSet<String>()
-
-    /** Root slug → its related band; guarded by [lock], capped, optional. */
-    private val relatedCache = HashMap<String, List<String>>()
-
-    /** Themed root slug → its same-theme siblings; guarded by [lock], capped, optional. */
-    private val siblingCache = HashMap<String, List<String>>()
-
-    /** The sitemap's collection addresses, once per instance; guarded by [lock]. */
-    private var sitemapCache: List<String>? = null
-
-    /**
-     * When a failed sitemap read may be attempted again, in epoch
-     * millis; 0 while the last read succeeded or none has failed.
-     * Guarded by [lock].
-     */
-    private var sitemapRetryAt = 0L
 }
