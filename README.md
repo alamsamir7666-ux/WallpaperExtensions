@@ -4,7 +4,7 @@ Extension repository for the [Cloudimage](https://github.com/alamsamir7666-ux/Cl
 Android app — installable wallpaper-source packages, published to this repo's
 `gh-pages` branch.
 
-The repository ships four keyless scrapers, all modeled on the two-layer
+The repository ships five keyless scrapers, all modeled on the two-layer
 Provider/Extractor pattern used by CloudStream plugins: the star,
 **`cloudimage.wallpapercave`**, its sharp-eyed sibling
 **`cloudimage.hdqwalls`** — HD, 4K, 5K and 8K wallpapers from hdqwalls.com,
@@ -13,11 +13,16 @@ direct search results, plain JPEG thumbnails) —
 **`cloudimage.wallpapers4k`** — the resolution-first library at
 4kwallpapers.com, whose schema.org markup hands over title, tags and
 originals with unusual candor, and whose search now scrolls the exact
-load-more stream its own website serves — and **`cloudimage.alphacoders`** —
+load-more stream its own website serves — **`cloudimage.alphacoders`** —
 Wallpaper Abyss at alphacoders.com, the deepest library of the set,
 whose listings disclose the original file itself, right in the grid,
 and whose real search endpoint delivers exactly what its own website
-shows.
+shows — and **`cloudimage.wallpapersafari`** — the gallery-first library
+at wallpapersafari.com, whose topic galleries serve their complete
+walls server-rendered, whose cards disclose the original, the uploader
+and the file's TRUE dimensions in one grid cell, and whose search is
+the site's own, read through the same two-step its album-first model
+demands.
 
 ## Install in the app
 
@@ -29,8 +34,8 @@ shows.
    verifies every package's SHA-256 on download, and installs it as a
    runtime-loaded provider.
 4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*,
-   *Alpha Coders*, or any mix. No API key, no account — each reads its
-   site the way the site's own browser UI does.
+   *Alpha Coders*, *WallpaperSafari*, or any mix. No API key, no
+   account — each reads its site the way the site's own browser UI does.
 
 ## Packages
 
@@ -40,6 +45,7 @@ shows.
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.alphacoders` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpapersafari` | 1.0.0 | 26 KB | popular, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -112,6 +118,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 providers/hdqwalls/          the second extension, same layout (21 tests)
 providers/wallpapers4k/      the third extension, same layout (27 tests)
 providers/alphacoders/       the fourth extension, same layout (29 tests)
+providers/wallpapersafari/   the fifth extension, same layout (24 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -350,6 +357,76 @@ lines plus 900 lines of tests):
   thumbnail really serving, and a PNG end-to-end — all green against the
   live site.
 
+## The WallpaperSafari extension
+
+The fifth scraper, built for a site that is *gallery-first* — content
+lives in topic galleries, each served complete on one server-rendered
+page (~700 source lines plus 590 lines of tests):
+
+- **Two grid shapes, one parser.** The home page's "Popular wallpapers"
+  wall serves fifty self-contained `gallery-item` anchors (the like
+  widget inside), while every topic gallery serves its complete set as
+  `post-image` blocks (the like widget in a sibling `imginfo` div — the
+  reason those cells slice by their wrapping div, not by the anchor).
+  Both shapes carry the same payload: the medium card image, the CDN
+  path of the original, the uploader, and — uniquely in this repository
+  — the file's TRUE dimensions, published by the like widget itself
+  (`data-width`/`data-height`), so listing items arrive with real specs
+  like `2560x1440` before details are ever fetched.
+- **Originals disclosed by CDN path.** `mcdn.wallpapersafari.com/medium/
+  {a}/{b}/{id}.{ext}` is the card; the original is the same path on
+  `cdn.wallpapersafari.com/{a}/{b}/{id}.{ext}` — one directory swap,
+  extension preserved (verified live: a 279-KB 2560x1440 JPEG and a
+  PNG, both serving). The home wall's generic `1920x1080 wallpaper`
+  alt texts are recognized as the labels they are and yield no title —
+  honest emptiness over noise.
+- **The site's real search, album-first.** wallpapersafari.com's search
+  box is a plain GET form to `/search?q=`, and it answers with GALLERY
+  cards, never single wallpapers — so search runs the CloudStream
+  two-step the WallpaperCave extension established: the query's gallery
+  cards, then the batch's topic pages fetched one by one and merged,
+  three galleries per app page, deduplicated, ten pages deep at most.
+  One query matching a single gallery serves that gallery whole —
+  `indian actress` delivers the site's 89-image gallery in one page,
+  exactly what the website itself shows. A query that matches nothing
+  is read from the site's own `couldn't find anything` heading: the
+  trending suggestions that follow it are never mistaken for results.
+  Both `+`- and `%20`-encoded multi-word queries serve identically
+  (verified live — the encoding trap that wallpapers4k 1.0.0 shipped
+  does not exist here).
+- **Category directories as streams.** The site's `/category/{slug}/`
+  pages are directories of the same gallery cards (168 for art), so the
+  host's `anime` filter walks `/category/art/anime/` three galleries per
+  page with served-id dedupe — the same stream machinery as search. The
+  site files no people category, so the host's `people` value honestly
+  lands on the default popular wall, documented rather than guessed.
+- **No fake feeds.** `/latest-uploads/` is an empty JavaScript shell —
+  no server-rendered latest exists — and no random endpoint exists, so
+  LATEST and RANDOM are deliberately not declared. The home wall is
+  one honest page: fifty complete items, no fabricated second page.
+- **Politeness.** robots.txt excludes `/download/`, `/downloadres/`
+  (never touched — the cards disclose the originals directly),
+  `/cdn-cgi/` and `/search`; search carries the same deliberate,
+  disclosed exception wallpapercave and 4kwallpapers already document —
+  touched only on explicit user actions, one request per action plus
+  one per merged gallery, byte-identical to the site's own search box,
+  never crawling or enumerating. The `/ajax/` endpoints the site
+  reserves for liking, rating and load-more are never called. Every
+  other path this provider touches stays inside the allowances.
+- **Verified.** 24 unit tests from real captured markup (both grid
+  shapes — home cells and post-image blocks with their sibling like
+  widgets — reordered single-quoted attributes, debris-cell isolation,
+  the gallery cards with their hit/miss headings, the two-step merge
+  with batching, dedupe and skip-on-failure, the zero-result marker's
+  trending defense, the deep cap, category streams and their served-id
+  windows, the unmapped-category fallback, the detail record, URL
+  round-trips, tag suggestions, sections and capabilities) plus a gated
+  `WallpaperSafariLiveCheckTest` (`WALLPAPERSAFARI_LIVE=1`): the home
+  wall with true dimensions, real search matching one gallery whole,
+  many-gallery search walking a fresh page two, the honest zero-result
+  miss, the anime category stream, definitive details, and the
+  disclosed original really serving — all green against the live site.
+
 ## Publishing (CI)
 
 On every push to `main` that touches `providers/**`, `tools/**`, or the
@@ -392,6 +469,8 @@ done
 # → providers/wallpapers4k/build/outputs/extension/cloudimage.wallpapers4k.zip
 ./gradlew :providers:alphacoders:check :providers:alphacoders:packageExtension
 # → providers/alphacoders/build/outputs/extension/cloudimage.alphacoders.zip
+./gradlew :providers:wallpapersafari:check :providers:wallpapersafari:packageExtension
+# → providers/wallpapersafari/build/outputs/extension/cloudimage.wallpapersafari.zip
 ```
 
 ## Adding another extension
