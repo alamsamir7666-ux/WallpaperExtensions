@@ -4,15 +4,17 @@ Extension repository for the [Cloudimage](https://github.com/alamsamir7666-ux/Cl
 Android app — installable wallpaper-source packages, published to this repo's
 `gh-pages` branch.
 
-The repository ships three keyless scrapers, all modeled on the two-layer
+The repository ships four keyless scrapers, all modeled on the two-layer
 Provider/Extractor pattern used by CloudStream plugins: the star,
 **`cloudimage.wallpapercave`**, its sharp-eyed sibling
 **`cloudimage.hdqwalls`** — HD, 4K, 5K and 8K wallpapers from hdqwalls.com,
 the friendliest scraping target in the set (real pagination everywhere,
-direct search results, plain JPEG thumbnails) — and
+direct search results, plain JPEG thumbnails) —
 **`cloudimage.wallpapers4k`** — the resolution-first library at
 4kwallpapers.com, whose schema.org markup hands over title, tags and
-originals with unusual candor.
+originals with unusual candor — and **`cloudimage.alphacoders`** —
+Wallpaper Abyss at alphacoders.com, the deepest library of the set,
+whose listings disclose the original file itself, right in the grid.
 
 ## Install in the app
 
@@ -23,9 +25,9 @@ originals with unusual candor.
    (`raw.githubusercontent.com/…/WallpaperExtensions/gh-pages/index.json`),
    verifies every package's SHA-256 on download, and installs it as a
    runtime-loaded provider.
-4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*, or any
-   mix. No API key, no account — each reads its site the way the site's
-   own browser UI does.
+4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*,
+   *Alpha Coders*, or any mix. No API key, no account — each reads its
+   site the way the site's own browser UI does.
 
 ## Packages
 
@@ -34,6 +36,7 @@ originals with unusual candor.
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.alphacoders` | 1.0.0 | 19 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
 
@@ -105,6 +108,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 └── src/…                    parser + provider + 34 unit tests
 providers/hdqwalls/          the second extension, same layout (21 tests)
 providers/wallpapers4k/      the third extension, same layout (19 tests)
+providers/alphacoders/       the fourth extension, same layout (25 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -251,6 +255,70 @@ tests):
   single-page search, query-preset shelves, and definitive details
   including a portrait-shape guard — all green against the live site.
 
+## The Alpha Coders extension
+
+The fourth scraper, built for the deepest library in the set — Wallpaper
+Abyss at alphacoders.com, hundreds of thousands of wallpapers behind
+topic pages that speak schema.org with rare generosity (~660 source
+lines plus 900 lines of tests):
+
+- **The original file, disclosed in the grid.** Every listing cell is an
+  `ImageObject` whose `contentUrl` points at the original itself —
+  `images{N}.alphacoders.com/{shard}/{id}.{ext}`, a plain JPG or PNG the
+  CDN serves directly (verified live: a 3840x2400 JPG at 1.4 MB fetched
+  byte-for-byte, no hotlink protection). Grid items carry a working
+  download URL before details are ever fetched, PNG extensions intact.
+- **Topic addresses instead of search.** The site consolidated its
+  browsing onto `/{slug}-wallpapers` pages — `anime-wallpapers` (211,000+
+  wallpapers), `naruto-wallpapers` (5,600+), `nature-wallpapers`
+  (63,000+) — paginated `?page=N`, fifteen per page, with a hard 404 past
+  the end. Search slugifies into that address shape (the site's own
+  robots.txt excludes its internal `/search` — this never touches it);
+  an exact topic hit walks its pages, a 404 is an honest miss. The
+  shelves name their topics' canonical addresses, because one redirecting
+  plural (`cars-`) lands on the Pixar movie, not on vehicles.
+- **Honest ends by construction.** The infinite-scroll listing carries
+  no "more exists" signal, so a feed offers `nextPage` only when its page
+  served items — and the end arrives as the site's own 404, mapped to an
+  empty page that never advertises more. An empty 200 ends the feed too,
+  and a hundred-page cap bounds the deepest scroll.
+- **True dimensions, author, file size, colors — one request.** The
+  big.php detail page publishes the file's TRUE resolution on its
+  `main-content` image (the listing's 350x219 attrs are its uniform card
+  crop, true of no wallpaper — the grid carries none, by regression
+  guard), plus an author credit, a File Info box (`3840x2400 1.38 MB
+  JPG`), the site's color row, and the caption. The info sheet fills
+  from one request — honest nulls only where the page is silent.
+- **The keyword row, minus the boilerplate.** Every cell carries the
+  site's keyword row, which ends in the same five SEO tags on every
+  single item (`desktop wallpaper, background, hd wallpaper, …`); the
+  parser filters exactly that observed tail, so titles, tags and tag
+  suggestions carry the site's own subject vocabulary — entities decoded
+  (`Naruto & Sasuke`, not `Naruto &amp; Sasuke`).
+- **Politeness.** The site's robots.txt allows everything this provider
+  touches (community pages, internal search, buy pages and the art/picture
+  sections are excluded — none used). One request per page of fifteen on
+  explicit user actions, capped at a hundred pages; the one 404 probe at
+  a feed's end is the same request a browser's next-page arrow produces.
+  The site serves plain non-browser User-Agents without challenge
+  (verified live against every path touched), and the image CDN serves
+  the thumbnail and original exactly where the markup points every
+  browser. The 250-KB listing pages parse on the default dispatcher —
+  the host fires a source's every section first page at once, and those
+  parses belong off the UI thread.
+- **Verified.** 25 unit tests from real captured markup (the full
+  schema.org cell with its duplicated keywords and boilerplate tail,
+  empty- and filled-name cells, flipped meta attribute order, malformed-
+  cell isolation, the 404 boundaries that end feeds and searches, the
+  past-cap guard, slugification, host-vocabulary routing, canonical
+  presets, the detail record's dims/author/size/colors, the by-author
+  title form, PNG extensions, KB sizes, the no-dims regression guard)
+  plus a gated `AlphaCodersLiveCheckTest` (`ALPHACODERS_LIVE=1`):
+  the popular batch through a fresh page two, the newest and anime
+  feeds, topic-search hit and honest miss, details with true dimensions
+  and file size, the original and thumbnail really serving, and a PNG
+  end-to-end — all green against the live site.
+
 ## Publishing (CI)
 
 On every push to `main` that touches `providers/**`, `tools/**`, or the
@@ -291,6 +359,8 @@ done
 # → providers/hdqwalls/build/outputs/extension/cloudimage.hdqwalls.zip
 ./gradlew :providers:wallpapers4k:check :providers:wallpapers4k:packageExtension
 # → providers/wallpapers4k/build/outputs/extension/cloudimage.wallpapers4k.zip
+./gradlew :providers:alphacoders:check :providers:alphacoders:packageExtension
+# → providers/alphacoders/build/outputs/extension/cloudimage.alphacoders.zip
 ```
 
 ## Adding another extension
