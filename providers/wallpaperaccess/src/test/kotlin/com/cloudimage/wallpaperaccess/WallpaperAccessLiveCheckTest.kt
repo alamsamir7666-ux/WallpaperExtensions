@@ -83,8 +83,9 @@ class WallpaperAccessLiveCheckTest {
                 "listing items must publish true dimensions (${first.width}x${first.height})",
                 page.wallpapers.all { it.width != null && it.height != null },
             )
-            // The site paginates nothing.
-            assertEquals("the site has no page two", null, page.nextPage)
+            // The listing's own batch is the whole inventory, but its
+            // Related Wallpapers band seeds the endless walk.
+            assertEquals("the related band seeds the walk", 2, page.nextPage)
         }
 
     @Test
@@ -142,6 +143,34 @@ class WallpaperAccessLiveCheckTest {
         }
 
     @Test
+    fun `the related band walk serves a real second batch`() =
+        runTest {
+            assumeTrue(live())
+            val configured = configured()
+            val first = configured.popular(page = 1).getOrThrow()
+            assumeTrue("the ranking carries no related band right now", first.nextPage != null)
+
+            val second = configured.popular(page = 2).getOrThrow()
+
+            // Page two is the band's first card — a sibling collection's
+            // whole batch, not the root's again.
+            assertTrue(
+                "expected a walked batch, got ${second.wallpapers.size}",
+                second.wallpapers.size >= 10,
+            )
+            val rootId = first.wallpapers.first().id
+            val rootPrefix = rootId.substringBefore('/')
+            assertTrue(
+                "the walked batch should come from a sibling collection, not '$rootPrefix'",
+                second.wallpapers.none { it.id.startsWith("$rootPrefix/") },
+            )
+            assertTrue(
+                "walked items must publish true dimensions too",
+                second.wallpapers.all { it.width != null && it.height != null },
+            )
+        }
+
+    @Test
     fun `the fresh feed and the anime category walk their own listings`() =
         runTest {
             assumeTrue(live())
@@ -171,6 +200,8 @@ class WallpaperAccessLiveCheckTest {
 
             assertTrue("expected a real batch, got ${hit.wallpapers.size}", hit.wallpapers.size >= 20)
             assertTrue(hit.wallpapers.all { it.id.startsWith("naruto/") })
+            // A hit seeds its own related-band walk.
+            assertEquals("the hit's related band seeds the walk", 2, hit.nextPage)
             // An unknown address is a miss, not a failure.
             assertTrue("expected an honest empty page", miss.wallpapers.isEmpty())
             assertEquals(null, miss.nextPage)

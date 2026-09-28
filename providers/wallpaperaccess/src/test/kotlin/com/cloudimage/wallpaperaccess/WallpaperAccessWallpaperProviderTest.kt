@@ -15,10 +15,14 @@ import org.junit.Test
  * WallpaperAccess provider over a scripted fake of the plugin-facing HTTP
  * facade, with fixtures cut from the live site's markup: the shared
  * data-attribute listing grid (popular, fresh, collections, slug-guessed
- * search), the single-page site guard, the robots-compliant slug-guess
- * search with its 404-is-a-miss contract, the detail record re-walked
- * from the id's own listing, and the host-vocabulary routing all stay
- * covered without a network.
+ * search), the related-band endless walk with its warm and cold caches,
+ * the robots-compliant slug-guess search with its 404-is-a-miss
+ * contract, the detail record re-walked from the id's own listing, and
+ * the host-vocabulary routing all stay covered without a network.
+ *
+ * Walk tests drive FRESH provider instances — the related-band cache is
+ * instance state, and a test must never depend on the cache another test
+ * left behind.
  */
 class WallpaperAccessWallpaperProviderTest {
     private val provider = WallpaperAccessWallpaperProvider()
@@ -53,6 +57,20 @@ class WallpaperAccessWallpaperProviderTest {
             this.routes = routes
             provider.configure(this, ProviderSettings { null })
         }
+
+    /**
+     * A fresh provider over its own client — for the walk tests, whose
+     * related-band cache must start empty every time.
+     */
+    private fun freshProvider(routes: Map<String, ProviderHttpResponse>): Pair<WallpaperAccessWallpaperProvider, FakeClient> {
+        val fresh = WallpaperAccessWallpaperProvider()
+        val client =
+            FakeClient().apply {
+                this.routes = routes
+                fresh.configure(this, ProviderSettings { null })
+            }
+        return fresh to client
+    }
 
     // Fixtures: shapes captured from wallpaperaccess.com, trimmed to the
     // parts the parsers key on.
@@ -137,6 +155,48 @@ class WallpaperAccessWallpaperProviderTest {
         </html>
         """.trimIndent()
 
+    /**
+     * The Related Wallpapers band a listing page serves after its grid —
+     * the real anchor shape from the live site, one card per sibling
+     * collection.
+     */
+    private fun relatedBand(vararg slugs: String): String =
+        buildString {
+            append("<h2 id=\"related\" class=\"ui center aligned color_black _h2\">Related Wallpapers</h2>\n")
+            slugs.forEach { slug ->
+                append(
+                    "<a title=\"${slug.replaceFirstChar { it.uppercase() }} Wallpapers\" " +
+                        "class=\"ui fluid image\" href=\"/$slug\">" +
+                        "<img class=\"preload\" alt=\"$slug Wallpaper\" data-src=\"/thumb/1.jpg\"></a>\n",
+                )
+            }
+            append("<h2 class=\"ui center aligned color_black _h2\">How to change your wallpaper</h2>")
+        }
+
+    /** A one-cell listing for a walked collection — the shared cell shape, its own ids. */
+    private fun walkedGrid(
+        slug: String,
+        numericId: String,
+    ): String =
+        """
+        <div id="$numericId"
+             data-fullimg="/full/$numericId.jpg"
+             data-or="1920x1080"
+             data-download="
+             /download/$slug-$numericId"
+             class="flexbox_item">
+            <div class="wrapper">
+                <a href="/download/$slug-$numericId">
+                    <img class=" thumb preload ads_popup"
+                         data-id="$numericId"
+                         data-slug="$slug"
+                         alt="1920x1080 $slug Cell"
+                         data-src="/full/$numericId.jpg">
+                </a>
+            </div>
+        </div>
+        """.trimIndent()
+
     // ------------------------------------------------------------ the feeds
 
     @Test
@@ -163,7 +223,8 @@ class WallpaperAccessWallpaperProviderTest {
             assertEquals(1920, first.width)
             assertEquals(1200, first.height)
             assertEquals(listOf("most-popular"), first.tags)
-            // The site paginates nothing — one batch, no next page.
+            // The fixture carries no related band — the feed ends after
+            // its batch. The walk tests below cover the banded shape.
             assertNull(page.nextPage)
         }
 
@@ -185,16 +246,160 @@ class WallpaperAccessWallpaperProviderTest {
             assertEquals("https://wallpaperaccess.com/thumb/1353883.jpg", second.thumbUrl)
         }
 
-    @Test
-    fun `page two answers honestly empty without a request`() =
-        runTest {
-            val client = configureWith(emptyMap())
+    // -------------------------------------------------------- the endless walk
 
-            val page = provider.popular(page = 2).getOrThrow()
+    @Test
+    fun `page one seeds the walk and deeper pages ride the related band`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/most-popular" to ok(popularGrid + relatedBand("flowers", "stars")),
+                        "https://wallpaperaccess.com/flowers" to ok(walkedGrid("flowers", "900001")),
+                        "https://wallpaperaccess.com/stars" to ok(walkedGrid("stars", "900002")),
+                    ),
+                )
+
+            val first = fresh.popular(page = 1).getOrThrow()
+            assertEquals("the band has cards, so the walk continues", 2, first.nextPage)
+
+            val second = fresh.popular(page = 2).getOrThrow()
+            assertEquals(1, second.wallpapers.size)
+            // The WALKED collection's slug rides in the id — the re-fetch
+            // address details() will use.
+            val walked = second.wallpapers.single()
+            assertEquals("flowers/900001.jpg", walked.id)
+            assertEquals("flowers", walked.tags.single())
+            assertEquals("still one card left in the band", 3, second.nextPage)
+
+            val third = fresh.popular(page = 3).getOrThrow()
+            assertEquals("stars/900002.jpg", third.wallpapers.single().id)
+            assertNull("the band is exhausted", third.nextPage)
+
+            // Page one fetched the root; pages two and three each fetched
+            // their card against the warm band cache — no root refetch.
+            assertEquals(
+                listOf(
+                    "https://wallpaperaccess.com/most-popular",
+                    "https://wallpaperaccess.com/flowers",
+                    "https://wallpaperaccess.com/stars",
+                ),
+                client.requests,
+            )
+        }
+
+    @Test
+    fun `a fresh instance resuming mid-scroll refetches the root band`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/most-popular" to ok(popularGrid + relatedBand("flowers")),
+                        "https://wallpaperaccess.com/flowers" to ok(walkedGrid("flowers", "900001")),
+                    ),
+                )
+
+            // No page one ever ran — the cold cache heals with one extra
+            // request, then serves the card.
+            val page = fresh.popular(page = 2).getOrThrow()
+
+            assertEquals("flowers/900001.jpg", page.wallpapers.single().id)
+            assertNull("one card in the band, nothing after it", page.nextPage)
+            assertEquals(
+                listOf(
+                    "https://wallpaperaccess.com/most-popular",
+                    "https://wallpaperaccess.com/flowers",
+                ),
+                client.requests,
+            )
+        }
+
+    @Test
+    fun `a page past the band answers empty without a request`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/most-popular" to ok(popularGrid + relatedBand("flowers")),
+                        "https://wallpaperaccess.com/flowers" to ok(walkedGrid("flowers", "900001")),
+                    ),
+                )
+            fresh.popular(page = 1).getOrThrow()
+            fresh.popular(page = 2).getOrThrow()
+
+            val past = fresh.popular(page = 3).getOrThrow()
+
+            assertTrue(past.wallpapers.isEmpty())
+            assertNull(past.nextPage)
+            assertEquals("the band was warm; no request may leave", 2, client.requests.size)
+        }
+
+    @Test
+    fun `a dead card is skipped with the walk kept alive`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/most-popular" to ok(popularGrid + relatedBand("flowers", "stars")),
+                        "https://wallpaperaccess.com/flowers" to notFound(),
+                        "https://wallpaperaccess.com/stars" to ok(walkedGrid("stars", "900002")),
+                    ),
+                )
+
+            val skipped = fresh.popular(page = 2).getOrThrow()
+
+            // The site's own card points at a page it no longer serves —
+            // an empty page whose nextPage keeps the walk going.
+            assertTrue(skipped.wallpapers.isEmpty())
+            assertEquals(3, skipped.nextPage)
+
+            val next = fresh.popular(page = 3).getOrThrow()
+            assertEquals("stars/900002.jpg", next.wallpapers.single().id)
+            assertNull(next.nextPage)
+            assertEquals(
+                listOf(
+                    "https://wallpaperaccess.com/most-popular",
+                    "https://wallpaperaccess.com/flowers",
+                    "https://wallpaperaccess.com/stars",
+                ),
+                client.requests,
+            )
+        }
+
+    @Test
+    fun `a listing without a related band ends after its batch`() =
+        runTest {
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/most-popular" to ok(popularGrid),
+                    ),
+                )
+
+            val first = fresh.popular(page = 1).getOrThrow()
+            assertNull(first.nextPage)
+
+            val second = fresh.popular(page = 2).getOrThrow()
+
+            assertTrue(second.wallpapers.isEmpty())
+            assertNull(second.nextPage)
+            assertEquals("the empty band was cached; no request may leave", 1, client.requests.size)
+        }
+
+    @Test
+    fun `a vanished root ends the walk honestly`() =
+        runTest {
+            val (fresh, _) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/fall" to notFound(),
+                    ),
+                )
+
+            val page = fresh.search(query = "fall", page = 2).getOrThrow()
 
             assertTrue(page.wallpapers.isEmpty())
             assertNull(page.nextPage)
-            assertTrue("the site has no page two; no request may leave", client.requests.isEmpty())
         }
 
     @Test
@@ -252,7 +457,7 @@ class WallpaperAccessWallpaperProviderTest {
             assertEquals("https://wallpaperaccess.com/fall", client.requests.single())
             assertEquals("fall/343386.jpg", page.wallpapers.single().id)
             assertEquals(listOf("fall"), page.wallpapers.single().tags)
-            assertNull("the site has no pagination", page.nextPage)
+            assertNull("the fixture carries no related band", page.nextPage)
         }
 
     @Test
@@ -301,15 +506,31 @@ class WallpaperAccessWallpaperProviderTest {
         }
 
     @Test
-    fun `search page two answers empty instead of repeating the batch`() =
+    fun `a search hit walks its own related band on deeper pages`() =
         runTest {
-            val client = configureWith(emptyMap())
+            val (fresh, client) =
+                freshProvider(
+                    linkedMapOf(
+                        "https://wallpaperaccess.com/fall" to ok(fallGrid + relatedBand("flowers")),
+                        "https://wallpaperaccess.com/flowers" to ok(walkedGrid("flowers", "900001")),
+                    ),
+                )
 
-            val page = provider.search(query = "fall", page = 2).getOrThrow()
+            val first = fresh.search(query = "fall", page = 1).getOrThrow()
+            assertEquals(2, first.nextPage)
 
-            assertTrue(page.wallpapers.isEmpty())
-            assertNull(page.nextPage)
-            assertTrue("no request may leave for a page the site cannot serve", client.requests.isEmpty())
+            val second = fresh.search(query = "fall", page = 2).getOrThrow()
+
+            assertEquals("flowers/900001.jpg", second.wallpapers.single().id)
+            assertEquals(listOf("flowers"), second.wallpapers.single().tags)
+            assertNull("one card in the band, nothing after it", second.nextPage)
+            assertEquals(
+                listOf(
+                    "https://wallpaperaccess.com/fall",
+                    "https://wallpaperaccess.com/flowers",
+                ),
+                client.requests,
+            )
         }
 
     @Test
@@ -560,6 +781,32 @@ class WallpaperAccessWallpaperProviderTest {
             """.trimIndent()
 
         assertEquals(1, WallpaperAccessParser.parseGrid(grid).size)
+    }
+
+    @Test
+    fun `the related band prunes self, non-collections and duplicates`() {
+        val band = relatedBand("flowers", "most-popular", "about", "flowers", "stars")
+
+        assertEquals(
+            listOf("flowers", "stars"),
+            WallpaperAccessParser.parseRelated(band, self = "most-popular"),
+        )
+    }
+
+    @Test
+    fun `a page without a related band answers empty`() {
+        assertTrue(WallpaperAccessParser.parseRelated(popularGrid, self = "most-popular").isEmpty())
+        assertTrue(WallpaperAccessParser.parseRelated(notFoundPage, self = "most-popular").isEmpty())
+    }
+
+    @Test
+    fun `a band with no trailing heading still parses inside its window`() {
+        val headingless = relatedBand("flowers", "stars").substringBefore("<h2 class=")
+
+        assertEquals(
+            listOf("flowers", "stars"),
+            WallpaperAccessParser.parseRelated(headingless, self = "most-popular"),
+        )
     }
 
     @Test

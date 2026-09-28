@@ -33,8 +33,11 @@ import com.cloudimage.provider.api.WallpaperProvider
  * adds `data-slug` (the owning collection) and an `alt` titled
  * `WxH Title`. The same filename under `/thumb/` is the site's lighter
  * 600-pixel preview, fifteen-for-fifteen across six listings live. There
- * is NO pagination anywhere — `?page=2` serves the identical page — and
- * unknown collection addresses answer a clean 404.
+ * is no pagination anywhere — `?page=2` serves the identical page — but
+ * every listing page ends with a Related Wallpapers band of sibling
+ * collections, the site's own "keep browsing" recommendations, and the
+ * endless scroll rides that band. Unknown collection addresses answer a
+ * clean 404.
  *
  * ## How the contract maps onto it
  *
@@ -42,25 +45,30 @@ import com.cloudimage.provider.api.WallpaperProvider
  *   walks that collection (`anime`, `people` — both real collections on
  *   this site), `sorting=date` walks the fresh feed `/new`, and everything
  *   else lands on the popular ranking, the default feed the browse tab
- *   shows first. Because the site has no pagination, every feed answers
- *   with its single batch and `nextPage` null — the grid just ends, the
- *   same way the site's own pages do.
+ *   shows first. Every feed then continues through the site's own Related
+ *   Wallpapers band: page one is the root listing's whole batch, page two
+ *   is the band's first card's batch, page three the second's, and so on
+ *   — the exact journey a browser user clicking through Related Wallpapers
+ *   takes, one collection per scroll, until the band runs out and the
+ *   grid ends the same way the site's own pages do.
  * - [search] never touches the site's `/search` — its robots.txt excludes
  *   it. Instead the query is slugified into the site's own collection
  *   address shape and walked: `naruto` → `/naruto`, `4K Gaming!` →
  *   `/4k-gaming` (both verified live). An exact collection hit serves its
- *   whole batch; an unknown address answers 404, which this provider
- *   reports as an honest empty results page — a miss, not a failure.
- *   Deeper pages answer honestly empty. A blank query (the contract's
- *   escape hatch) lands on the popular feed's first page, the same default
- *   the blank popular feed would show.
+ *   whole batch, then walks that collection's own related band — the
+ *   "more like this" the site itself recommends. An unknown address
+ *   answers 404, which this provider reports as an honest empty results
+ *   page — a miss, not a failure, seeding no walk. A blank query (the
+ *   contract's escape hatch) lands on the popular feed, the same default
+ *   the blank popular feed would show, and walks its band from there.
  * - [sections] offers sixteen shelves: Popular, Latest (the host
  *   `sorting=date` preset over `/new`), Anime and People (the host
  *   `category` vocabulary), and twelve tag-style `query` presets —
  *   Nature, Space, Abstract, Cars, Games, Movies, Animals, Fantasy,
  *   Music, Dark, Minimal, City — each naming a real collection the
  *   slug-guess search addresses exactly (all verified live, twenty-seven
- *   to a hundred and four items each).
+ *   to a hundred and four items each), and each walking its own related
+ *   band as the scroll deepens.
  * - [details] re-walks the listing the item came from — the id IS that
  *   pair, `collection/fileName` — and answers the cell's own record: the
  *   original URL, the TRUE dimensions from `data-or`, the alt-derived
@@ -79,9 +87,13 @@ import com.cloudimage.provider.api.WallpaperProvider
  * provider touches neither: originals are read from the cell's own
  * `data-fullimg` attribute, search rides collection pages at their public
  * slug addresses, the same links the site's own navigation serves every
- * visitor. Every listing is ONE request returning the whole batch — a
- * browser tab on the same page costs the same — and fetches happen only
- * on explicit user actions. Preview and original image URLs are fetched
+ * visitor. Page one of a feed costs one request returning the whole
+ * batch — a browser tab on the same page costs the same; each deeper page
+ * costs one or two (the walked card, plus the root band when this
+ * instance has not yet seen it) — a browser user clicking the site's own
+ * Related cards spends the same. Fetches happen only on explicit user
+ * actions, and the walk never revisits a card it has already served.
+ * Preview and original image URLs are fetched
  * only by the app's image pipeline when it renders or downloads an item,
  * exactly as the site's own markup directs every browser. The site serves
  * plain non-browser User-Agents without challenge (verified live against
@@ -91,10 +103,12 @@ import com.cloudimage.provider.api.WallpaperProvider
  * ## State
  *
  * The contract asks plugins to be stateless; the only mutable state is
- * the collection-name pool feeding [suggestTags] — a bonus, never a
- * dependency. A fresh instance answers identically, at worst without
- * suggestions. The pool is guarded by one lock; sections load in parallel
- * on the host side.
+ * optional caches that never gate correctness — the collection-name pool
+ * feeding [suggestTags] and the related-band cache feeding the walk. A
+ * fresh instance answers identically, at worst re-fetching a root band it
+ * has not seen (one extra request, self-healing) or without suggestions.
+ * Both caches are guarded by one lock; sections load in parallel on the
+ * host side.
  *
  * ## Dimensions
  *
@@ -112,7 +126,7 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "WallpaperAccess",
-            versionName = "1.0.0",
+            versionName = "1.1.0",
             author = "Cloudimage",
             description = "HD, 4K and up wallpapers from wallpaperaccess.com - scraped, keyless.",
             // The site curates its collections and carries no per-item
@@ -135,8 +149,10 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
      * The default feed, ridden through the host vocabulary: a recognized
      * `category` walks that collection's page, `sorting=date` walks the
      * fresh feed, and everything else lands on the popular ranking.
-     * Category wins over sorting: it is the primary axis of the site's
-     * content. Page one is the whole batch — the site paginates nothing.
+     * Whatever the root, deeper pages walk its Related Wallpapers band —
+     * the site's own "keep browsing" recommendations, one collection per
+     * page. Category wins over sorting: it is the primary axis of the
+     * site's content.
      */
     override suspend fun popular(
         page: Int,
@@ -157,11 +173,11 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
      * hits `/naruto`, `4K Gaming!` hits `/4k-gaming`. An unknown address
      * answers 404, which is a miss, not a failure: the honest answer is
      * an empty results page, exactly what the site's own no-results
-     * moment looks like. The site has no pagination, so page one is the
-     * whole batch and deeper pages answer honestly empty without a
-     * request. A blank query (the contract's escape hatch) lands on the
-     * popular feed's first page, the same default the blank popular feed
-     * would show.
+     * moment looks like, and no walk is seeded from it. A hit serves its
+     * whole batch, then walks that collection's own related band on
+     * deeper pages. A blank query (the contract's escape hatch) lands on
+     * the popular feed, the same default the blank popular feed would
+     * show.
      */
     override suspend fun search(
         query: String,
@@ -169,19 +185,8 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         filters: Filters,
     ): Result<Page> =
         runCatching {
-            val slug = WallpaperAccessParser.slugify(query)
-            if (slug.isEmpty()) {
-                return@runCatching listingPage(POPULAR_SLUG, 1)
-            }
-            if (page != 1) return@runCatching Page(emptyList(), nextPage = null)
-            val url = "$BASE_URL/$slug"
-            val response = get(url)
-            when {
-                response.isSuccessful -> Page(gridWallpapers(response.bodyText, slug), nextPage = null)
-                // No such collection — a search miss, not a source error.
-                response.statusCode == 404 -> Page(emptyList(), nextPage = null)
-                else -> throw httpError(response.statusCode)
-            }
+            val root = WallpaperAccessParser.slugify(query).ifEmpty { POPULAR_SLUG }
+            listingPage(root, page, rootNotFoundIsMiss = true)
         }
 
     /**
@@ -290,21 +295,93 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
     // ---------------------------------------------------------------- feed
 
     /**
-     * Any listing page, page one only: the site paginates NOTHING —
-     * `?page=2` serves the identical page — so the feed answers with its
-     * single batch and `nextPage` null, and deeper pages answer honestly
-     * empty WITHOUT a request, the same guard the capped scrapers use.
+     * Any listing feed, walked page by page through the site's own
+     * Related Wallpapers band. Page one is the root listing's whole
+     * batch — the site paginates nothing, one page IS the collection's
+     * entire inventory. Deeper pages walk the root's related band, one
+     * recommended collection per page in the site's own order: page two
+     * serves the first card's batch, page three the second's, and so on
+     * until the band runs out, where the feed ends with `nextPage` null.
+     * A card the site no longer serves (404) is skipped gracefully — an
+     * empty page whose `nextPage` keeps the walk alive, which the host's
+     * merged feed already understands. The walked collection's own slug
+     * rides in every item's id, so [details] re-walks the listing the
+     * item actually came from.
      */
     private suspend fun listingPage(
-        slug: String,
+        rootSlug: String,
         page: Int,
+        rootNotFoundIsMiss: Boolean = false,
     ): Page {
-        if (page != 1) return Page(emptyList(), nextPage = null)
-        val response = get("$BASE_URL/$slug")
-        if (!response.isSuccessful) {
-            throw httpError(response.statusCode)
+        if (page < 1) return Page(emptyList(), nextPage = null)
+        if (page == 1) {
+            val response = get("$BASE_URL/$rootSlug")
+            return when {
+                response.isSuccessful -> {
+                    val html = response.bodyText
+                    val related = rememberRelated(rootSlug, html)
+                    Page(
+                        gridWallpapers(html, rootSlug),
+                        nextPage = if (related.isEmpty()) null else 2,
+                    )
+                }
+                // A search address that does not exist is a miss; a broken
+                // default feed is a source error. The caller picks.
+                rootNotFoundIsMiss && response.statusCode == 404 -> Page(emptyList(), nextPage = null)
+                else -> throw httpError(response.statusCode)
+            }
         }
-        return Page(gridWallpapers(response.bodyText, slug), nextPage = null)
+        val related = relatedListOf(rootSlug)
+        val index = page - 2
+        if (index >= related.size) return Page(emptyList(), nextPage = null)
+        val target = related[index]
+        val more = index + 1 < related.size
+        val response = get("$BASE_URL/$target")
+        return when {
+            response.isSuccessful ->
+                Page(
+                    gridWallpapers(response.bodyText, target),
+                    nextPage = if (more) page + 1 else null,
+                )
+            // The site's own card points at a page it no longer serves —
+            // skip it and let the next page continue the walk.
+            response.statusCode == 404 -> Page(emptyList(), nextPage = if (more) page + 1 else null)
+            else -> throw httpError(response.statusCode)
+        }
+    }
+
+    /**
+     * The root's related band — from the cache when this instance has
+     * already seen the listing, refetched when it has not (a fresh
+     * instance resuming mid-scroll heals itself with one extra request).
+     * A root that no longer answers 404 ends the walk honestly: empty
+     * band, no error — the feed simply ends where the site ends it. Any
+     * other failure propagates as a source error, per the facade
+     * contract.
+     */
+    private suspend fun relatedListOf(rootSlug: String): List<String> {
+        synchronized(lock) { relatedCache[rootSlug] }?.let { return it }
+        val response = get("$BASE_URL/$rootSlug")
+        if (response.statusCode == 404) return emptyList()
+        if (!response.isSuccessful) throw httpError(response.statusCode)
+        return rememberRelated(rootSlug, response.bodyText)
+    }
+
+    /**
+     * Parses and caches a listing's related band. The cache is a cost
+     * saver, never a correctness dependency: capped, lock-guarded, and
+     * silently skipped when full — the walk refetches the root band
+     * instead, one extra request, and answers identically.
+     */
+    private fun rememberRelated(
+        rootSlug: String,
+        html: String,
+    ): List<String> {
+        val related = WallpaperAccessParser.parseRelated(html, self = rootSlug)
+        synchronized(lock) {
+            if (relatedCache.size < RELATED_CACHE_LIMIT) relatedCache[rootSlug] = related
+        }
+        return related
     }
 
     /** The fresh batch — the `/new` feed the site labels New Wallpapers. */
@@ -392,9 +469,18 @@ class WallpaperAccessWallpaperProvider : WallpaperProvider {
         const val TAG_POOL_LIMIT = 200
         const val TAG_SUGGESTION_LIMIT = 8
 
-        /** One lock over the pool; sections load in parallel. */
+        /**
+         * The related-band cache's bound — one root per tab or query in
+         * play, with room to spare for a long browsing session.
+         */
+        const val RELATED_CACHE_LIMIT = 32
+
+        /** One lock over the pools; sections load in parallel. */
         val lock = Any()
     }
 
     private val slugPool = LinkedHashSet<String>()
+
+    /** Root slug → its related band; guarded by [lock], capped, optional. */
+    private val relatedCache = HashMap<String, List<String>>()
 }
