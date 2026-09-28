@@ -15,9 +15,11 @@ import org.junit.Test
  * 4K Wallpapers provider over a scripted fake of the plugin-facing HTTP
  * facade, with fixtures cut from the live site's markup: the shared
  * schema.org listing grid (homepage, popular, category, search), the
- * pagination bar's ctrl-right contract, the single-page search guard, the
- * detail record's labeled original and true dimensions, and the
- * host-vocabulary routing all stay covered without a network.
+ * pagination bar's ctrl-right contract, the search pager's hidden
+ * load-more walk (page-one form, paged path form, last-page stop,
+ * zero-result and 404 honesty), the detail record's labeled original and
+ * true dimensions, and the host-vocabulary routing all stay covered
+ * without a network.
  */
 class Wallpapers4KWallpaperProviderTest {
     private val provider = Wallpapers4KWallpaperProvider()
@@ -84,7 +86,7 @@ class Wallpapers4KWallpaperProviderTest {
         <p class="pages"><a data-ripples href="?page=13" class="ctrl-left">&lsaquo; Previous</a> <strong class="active" data-page="14">14</strong></p>
         """.trimIndent()
 
-    /** The search results grid — cells, but no pagination bar at all. */
+    /** The search results grid — cells plus the HIDDEN, script-driven pager bar. */
     private val searchGrid =
         """
         <div class="pics" id="pics-list"><p itemprop="associatedMedia" itemscope itemtype="http://schema.org/ImageObject" class="wallpapers__item" ><meta itemprop="keywords" content="Naruto Uzumaki, Anime series, Manga, 4K"> <link itemprop="contentUrl" href="/images/walls/thumbs_2t/27165.jpg">
@@ -93,6 +95,29 @@ class Wallpapers4KWallpaperProviderTest {
                                         <img itemprop="thumbnail" src="/images/walls/thumbs/27165.jpg" loading="lazy" width="400" height="225" alt="Naruto Uzumaki, Anime series, Manga, 4K"/>
                                         </span></a>
                                         </p>
+        """.trimIndent()
+
+    /**
+     * The hidden search pager, cut from the live site's `indian actress`
+     * results — `<strong>` markers instead of anchors, the load-more
+     * script's own source of truth. Cut exactly as served, hidden style
+     * and all.
+     */
+    private val searchPager =
+        """
+        <p class="pages" style="display: none;"><strong class="active" data-page="1">1</strong> <strong data-page="2">2</strong> <strong data-page="3">3</strong> <span>&hellip;</span> <strong data-page="18">18</strong>  <strong class="ctrl-right">Next &rsaquo;</strong></p>
+        """.trimIndent()
+
+    /** A deeper page's hidden pager — the active marker has moved. */
+    private val searchPagerPageTwo =
+        """
+        <p class="pages" style="display: none;"><strong data-page="1">1</strong> <strong class="active" data-page="2">2</strong> <strong data-page="3">3</strong> <strong data-page="4">4</strong> <span>&hellip;</span> <strong data-page="18">18</strong>  <strong class="ctrl-right">Next &rsaquo;</strong></p>
+        """.trimIndent()
+
+    /** The last page's hidden pager — active IS the last marker: the walk ends. */
+    private val searchPagerLast =
+        """
+        <p class="pages" style="display: none;"><strong data-page="1">1</strong> <span>&hellip;</span> <strong data-page="17">17</strong> <strong class="active" data-page="18">18</strong></p>
         """.trimIndent()
 
     /**
@@ -260,12 +285,12 @@ class Wallpapers4KWallpaperProviderTest {
         }
 
     @Test
-    fun `search answers with items and honestly no next page`() =
+    fun `search page one rides the form's own address and the hidden pager`() =
         runTest {
             val client =
                 configureWith(
                     linkedMapOf(
-                        "https://4kwallpapers.com/search/" to ok(searchGrid),
+                        "https://4kwallpapers.com/search/" to ok(searchGrid + searchPager),
                     ),
                 )
 
@@ -274,24 +299,117 @@ class Wallpapers4KWallpaperProviderTest {
             assertEquals("https://4kwallpapers.com/search/?q=naruto", client.requests.single())
             assertEquals(1, page.wallpapers.size)
             assertEquals("anime/naruto-uzumaki-27165.html", page.wallpapers.first().id)
-            assertNull("the site's search is single-page by design", page.nextPage)
+            assertEquals("the hidden pager offers the load-more walk", 2, page.nextPage)
         }
 
     @Test
-    fun `search page two answers empty instead of repeating the batch`() =
+    fun `search page two rides the load-more path form the site's button requests`() =
         runTest {
             val client =
                 configureWith(
                     linkedMapOf(
-                        "https://4kwallpapers.com/search/" to ok(searchGrid),
+                        "https://4kwallpapers.com/search/naruto?page=2" to ok(searchGrid + searchPagerPageTwo),
                     ),
                 )
 
             val page = provider.search(query = "naruto", page = 2).getOrThrow()
 
+            assertEquals("https://4kwallpapers.com/search/naruto?page=2", client.requests.single())
+            assertEquals(1, page.wallpapers.size)
+            assertEquals("the active marker has moved with the page", 3, page.nextPage)
+        }
+
+    @Test
+    fun `a multi-word query page one travels percent-twenty in the q parameter too`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/" to ok(searchGrid + searchPager),
+                    ),
+                )
+
+            provider.search(query = "indian actress", page = 1).getOrThrow()
+
+            // The site reads ?q= as a raw token: the `+` form encoding
+            // serves ZERO multi-word results (verified live).
+            assertEquals("https://4kwallpapers.com/search/?q=indian%20actress", client.requests.single())
+        }
+
+    @Test
+    fun `a multi-word query travels the path as percent-twenty, never plus`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/indian%20actress?page=2" to ok(searchGrid + searchPagerPageTwo),
+                    ),
+                )
+
+            provider.search(query = "indian actress", page = 2).getOrThrow()
+
+            // The `+` form is a form convention that a path reads literally
+            // — the site answers it 404 (verified live).
+            assertEquals("https://4kwallpapers.com/search/indian%20actress?page=2", client.requests.single())
+        }
+
+    @Test
+    fun `the last search page's pager stops the walk`() =
+        runTest {
+            configureWith(
+                linkedMapOf(
+                    "https://4kwallpapers.com/search/naruto?page=18" to ok(searchGrid + searchPagerLast),
+                ),
+            )
+
+            val page = provider.search(query = "naruto", page = 18).getOrThrow()
+
+            assertEquals(1, page.wallpapers.size)
+            assertNull("active IS the last marker — nothing more", page.nextPage)
+        }
+
+    @Test
+    fun `a zero-result search has no pager and answers honestly empty-ended`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/" to ok("<div class=\"pics\" id=\"pics-list\"></div>"),
+                    ),
+                )
+
+            val page = provider.search(query = "zzxxqqyywerty", page = 1).getOrThrow()
+
             assertTrue(page.wallpapers.isEmpty())
             assertNull(page.nextPage)
-            assertTrue("no request may leave for a page the site cannot serve", client.requests.isEmpty())
+            assertEquals(1, client.requests.size)
+        }
+
+    @Test
+    fun `a search 404 degrades to an honest empty page, not a failure`() =
+        runTest {
+            configureWith(
+                linkedMapOf(
+                    "https://4kwallpapers.com/search/" to ProviderHttpResponse(404, emptyMap(), ByteArray(0)),
+                ),
+            )
+
+            val page = provider.search(query = "gone", page = 2).getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+        }
+
+    @Test
+    fun `search past the deep cap refuses before any request`() =
+        runTest {
+            val client = configureWith(emptyMap())
+
+            val page = provider.search(query = "naruto", page = 101).getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+            assertTrue("no request may leave for a capped page", client.requests.isEmpty())
         }
 
     @Test
@@ -468,5 +586,28 @@ class Wallpapers4KWallpaperProviderTest {
         assertTrue(related.tags.contains("5K"))
         assertEquals("https://4kwallpapers.com/images/walls/thumbs/26737.jpg", related.thumbUrl)
         assertEquals("https://4kwallpapers.com/images/walls/orig/26737.jpg", related.originalUrl)
+    }
+
+    @Test
+    fun `the search pager reads its markers in any attribute order`() {
+        // data-page BEFORE class, single quotes, an extra class token — the
+        // marker still has to be found and read.
+        val bar =
+            """
+            <p class='pages' style='display: none;'><strong data-page='7' class='marker active'>7</strong> <strong data-page='8'>8</strong> <strong class='ctrl-right'>Next &rsaquo;</strong></p>
+            """.trimIndent()
+
+        assertEquals(8, Wallpapers4KParser.parseSearchNextPage(bar))
+    }
+
+    @Test
+    fun `a search pager without an active marker stops honestly`() {
+        val bar =
+            """
+            <p class="pages"><strong data-page="1">1</strong> <strong data-page="2">2</strong></p>
+            """.trimIndent()
+
+        assertNull(Wallpapers4KParser.parseSearchNextPage(bar))
+        assertNull(Wallpapers4KParser.parseSearchNextPage("<div>no pager at all</div>"))
     }
 }

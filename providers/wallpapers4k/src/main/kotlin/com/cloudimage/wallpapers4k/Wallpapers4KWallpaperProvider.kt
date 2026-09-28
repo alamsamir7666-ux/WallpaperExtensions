@@ -38,8 +38,12 @@ import java.net.URLEncoder
  * the same filename back under `/images/walls/orig/` (verified live:
  * 5120x2880 at 5.8 MB, 4000x4000 PNG at 3.0 MB). Pagination rides
  * `?page=N` behind a `p.pages` bar whose `Next ›` link (`class="ctrl-right"`)
- * is the site's own "more exists" signal, absent on the last page; search
- * answers with a single page of twenty-four and no bar at all.
+ * is the site's own "more exists" signal, absent on the last page. Search
+ * results answer with the same grid plus the bar's hidden, script-driven
+ * flavor: the links become bare `data-page` markers and a "Load more"
+ * button requests `/search/{query}?page=N` — the paged form the browser
+ * UI itself walks (verified live: `indian actress` serves 18 distinct
+ * pages, twenty-four each).
  *
  * ## How the contract maps onto it
  *
@@ -49,14 +53,20 @@ import java.net.URLEncoder
  *   grid — the site's freshest uploads, paginated nearly a thousand pages
  *   deep — and everything else lands on the popular ranking, the default
  *   feed the browse tab shows first.
- * - [search] is one request, page one only: the site's search caps at a
- *   single batch of twenty-four with no pagination, so `nextPage` is null
- *   and deeper pages answer honestly empty. A blank query (the contract's
- *   escape hatch) lands on the trending feed's first page, the same
- *   default the blank popular feed would show. The query-preset shelves
- *   ride this search; a term that names a category returns that
- *   category's content (verified live: `nature` — 21 of the first
- *   twenty-four results are the Nature listing's own page one).
+ * - [search] rides the site's real search, page by page: the first page
+ *   answers `/search/?q=`, every deeper page walks the same load-more
+ *   form the site's own "Load more" button requests —
+ *   `/search/{query}?page=N` — and BOTH carry the query percent-encoded
+ *   with spaces as `%20` (the site reads its `?q=` as a raw token: the
+ *   `+` form encoding serves zero multi-word results and the paged path
+ *   answers it 404 — verified live). The hidden pages bar's markers say
+ *   when more remain, so `nextPage` is honest and the walk stops where
+ *   the site's own walk stops. A blank query (the contract's escape
+ *   hatch) lands on the trending feed's first page, the same default the
+ *   blank popular feed would show. The query-preset shelves ride this
+ *   search; a term that names a category returns that category's content
+ *   (verified live: `nature` — 21 of the first twenty-four results are
+ *   the Nature listing's own page one).
  * - [sections] offers fourteen shelves: Popular, Latest (the host
  *   `sorting=date` preset), Anime and People (the host `category`
  *   vocabulary), and tag-style `query` presets for Nature, Space,
@@ -119,7 +129,7 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "4K Wallpapers",
-            versionName = "1.0.0",
+            versionName = "1.1.0",
             author = "Cloudimage",
             description = "4K, 5K, 8K and up wallpapers from 4kwallpapers.com - scraped, keyless.",
             // The site curates its uploads and carries no per-item rating
@@ -159,12 +169,15 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
         }
 
     /**
-     * One request, page one only: the site's search answers with a single
-     * batch of twenty-four and no pagination bar, so there is no page two
-     * to walk — deeper pages answer honestly empty instead of repeating
-     * the batch. A blank query (the contract's escape hatch) lands on the
-     * trending feed's first page, the same default the blank popular feed
-     * would show.
+     * The site's real search, page by page. Page one answers the form's
+     * own `/search/?q=`; every deeper page walks the load-more form the
+     * site's "Load more" button itself requests — `/search/{query}?page=N`
+     * — so the app scrolls the exact stream the website scrolls (verified
+     * live: `indian actress` walks 18 distinct pages the browser walk
+     * walks). The hidden pages bar's markers gate `nextPage`, a 404
+     * answers honestly empty, and a blank query (the contract's escape
+     * hatch) lands on the trending feed's first page, the same default the
+     * blank popular feed would show.
      */
     override suspend fun search(
         query: String,
@@ -175,8 +188,7 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
             if (query.isBlank()) {
                 return@runCatching listingPage(TRENDING_PATH, 1)
             }
-            if (page != 1) return@runCatching Page(emptyList(), nextPage = null)
-            listingPage("/search/?q=${encode(query)}", page)
+            searchPage(query, page)
         }
 
     /**
@@ -285,8 +297,8 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
         page: Int,
     ): Page {
         if (page < 1 || page > MAX_PAGES) return Page(emptyList(), nextPage = null)
-        // Search is single-page by contract (see search), so every paginated
-        // path here is a plain page URL and `?page=` can only append cleanly.
+        // Only plain listing paths reach here — search walks its own paged
+        // form — so `?page=` can only append cleanly.
         val url = if (page > 1) "$BASE_URL$path?page=$page" else "$BASE_URL$path"
         val response = get(url)
         if (!response.isSuccessful) {
@@ -295,6 +307,43 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
         val wallpapers =
             Wallpapers4KParser.parseGrid(response.bodyText).map(::gridWallpaper).let(::rememberTagsIn)
         return Page(wallpapers, nextPage = Wallpapers4KParser.parseNextPage(response.bodyText))
+    }
+
+    /**
+     * One page of the site's search stream. Page one rides the form's own
+     * `?q=` address; deeper pages ride the load-more form the site's own
+     * button requests — and BOTH carry the query percent-encoded with
+     * spaces as `%20`: this site's search reads its parameter as a raw
+     * percent-encoded token, not a form encoding, so the `+` URLEncoder
+     * produces answers ZERO results for a multi-word query (verified live:
+     * `?q=indian+actress` serves nothing, `?q=indian%20actress` serves
+     * twenty-four), and inside the paged PATH a `+` is a literal plus that
+     * answers 404. The hidden pages bar's `active`/`data-page` markers
+     * decide `nextPage` — the same pair the site's script walks — and a
+     * 404 degrades to an honest empty page instead of a source failure.
+     */
+    private suspend fun searchPage(
+        query: String,
+        page: Int,
+    ): Page {
+        if (page < 1 || page > MAX_PAGES) return Page(emptyList(), nextPage = null)
+        val term = encodeSearchTerm(query)
+        val url =
+            if (page == 1) {
+                "$BASE_URL/search/?q=$term"
+            } else {
+                "$BASE_URL/search/$term?page=$page"
+            }
+        val response = get(url)
+        if (response.statusCode == NOT_FOUND) {
+            return Page(emptyList(), nextPage = null)
+        }
+        if (!response.isSuccessful) {
+            throw httpError(response.statusCode)
+        }
+        val wallpapers =
+            Wallpapers4KParser.parseGrid(response.bodyText).map(::gridWallpaper).let(::rememberTagsIn)
+        return Page(wallpapers, nextPage = Wallpapers4KParser.parseSearchNextPage(response.bodyText))
     }
 
     /** The trending batch — the homepage grid, no pagination signal worth reading. */
@@ -358,6 +407,15 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
      */
     private fun encodePath(path: String): String = path.split('/').joinToString("/") { encode(it) }
 
+    /**
+     * A query term as ONE percent-encoded token with spaces as `%20` —
+     * valid in the `?q=` value and in the paged path alike, because this
+     * site's search reads its parameter as a raw token (the `+` form
+     * encoding URLEncoder produces answers zero results in the query and
+     * 404 in the path — both verified live).
+     */
+    private fun encodeSearchTerm(value: String): String = encode(value).replace("+", "%20")
+
     private companion object {
         const val ID = "cloudimage.wallpapers4k"
         const val BASE_URL = "https://4kwallpapers.com"
@@ -379,6 +437,9 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
 
         /** Deep-pagination cap: a hundred pages, twenty-four items each. */
         const val MAX_PAGES = 100
+
+        /** The site's not-found answer, degraded to an honest empty search page. */
+        const val NOT_FOUND = 404
 
         /** Per-item tag cap and the suggest pool's bounds. */
         const val MAX_TAGS = 6

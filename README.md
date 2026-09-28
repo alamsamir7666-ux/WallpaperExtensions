@@ -12,7 +12,8 @@ the friendliest scraping target in the set (real pagination everywhere,
 direct search results, plain JPEG thumbnails) —
 **`cloudimage.wallpapers4k`** — the resolution-first library at
 4kwallpapers.com, whose schema.org markup hands over title, tags and
-originals with unusual candor — and **`cloudimage.alphacoders`** —
+originals with unusual candor, and whose search now scrolls the exact
+load-more stream its own website serves — and **`cloudimage.alphacoders`** —
 Wallpaper Abyss at alphacoders.com, the deepest library of the set,
 whose listings disclose the original file itself, right in the grid,
 and whose real search endpoint delivers exactly what its own website
@@ -37,7 +38,7 @@ shows.
 |---|---|---|---|---|
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
-| `cloudimage.wallpapers4k` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpapers4k` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.alphacoders` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 
 ### 1.2.0 — a full shelf of browse tabs
@@ -109,7 +110,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 ├── extension.json           manifest: id, version, entry class
 └── src/…                    parser + provider + 34 unit tests
 providers/hdqwalls/          the second extension, same layout (21 tests)
-providers/wallpapers4k/      the third extension, same layout (19 tests)
+providers/wallpapers4k/      the third extension, same layout (27 tests)
 providers/alphacoders/       the fourth extension, same layout (29 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
@@ -237,24 +238,42 @@ tests):
   Fantasy, Music and Dark are tag-style `query` presets riding the
   site's own search, which names them precisely (verified live:
   `nature` returns the Nature listing's own page one, 21 of 24).
-- **Honest search.** The site's search serves a single page of
-  twenty-four with no pagination — `nextPage` is null, and deeper pages
-  answer empty instead of repeating the batch.
+- **The site's real search, page by page (1.1.0).** The website's search
+  results scroll a hidden, script-driven pager — a "Load more" button
+  requesting `/search/{query}?page=N` — and this provider rides exactly
+  that stream: page one on the form's own `/search/?q=`, deeper pages on
+  the load-more path form, `nextPage` gated by the pager's own
+  `active`/`data-page` markers (verified live: `indian actress` walks 18
+  distinct pages of twenty-four, the exact stream the browser scrolls).
+  The same fix cured a silent 1.0.0 bug the single-word test suite had
+  missed: the site reads its `?q=` as a raw percent-encoded token, so the
+  `+` that URLEncoder produces served **zero results for every multi-word
+  query** — `?q=indian%20actress` serves twenty-four, `?q=indian+actress`
+  serves none, and the paged path answers `+` with a 404. Both encodings
+  now travel as `%20`. The site's robots.txt excludes `/search/` for
+  crawlers; this provider touches it only on explicit user actions — one
+  request per page, byte-identical to the website's own traffic — never
+  crawling or enumerating (a deliberate, disclosed exception; every other
+  path stays inside the allowances).
 - **Politeness.** robots.txt excludes only crawl-budget paths
   (`/search/`, `/recent/`, the thumb directories); the provider walks
   allowed pages exclusively — `/recent/` is deliberately unused because
-  the homepage grid serves the identical freshest batch — touches
-  `/search/` only on an explicit user search, and lets the app's image
-  pipeline fetch exactly the URLs the site's own markup points every
-  browser at. One request per page of twenty-four, capped at 100 pages.
-- **Verified.** 19 unit tests from real captured markup (both cell
+  the homepage grid serves the identical freshest batch — and lets the
+  app's image pipeline fetch exactly the URLs the site's own markup
+  points every browser at. One request per page of twenty-four, capped
+  at 100 pages. `/search/` carries the same disclosed robots exception
+  the search bullet above documents.
+- **Verified.** 27 unit tests from real captured markup (both cell
   shapes — full listing cells and lean related-cells, PNG extension
-  round-trips, the ctrl-right pagination contract, single-page search
-  honesty, detail fallbacks, host-vocabulary routing, the no-dims
-  regression guard) plus a gated `Wallpapers4KLiveCheckTest`
+  round-trips, the ctrl-right pagination contract, the hidden search
+  pager in live-cut and synthetic forms — page-one form, paged path form,
+  `%20` encoding in both positions, last-page stop, zero-result and 404
+  honesty, the deep cap — detail fallbacks, host-vocabulary routing, the
+  no-dims regression guard) plus a gated `Wallpapers4KLiveCheckTest`
   (`WALLPAPERS4K_LIVE=1`): popular through two fresh pages, the
-  multi-megabyte original itself, homepage and category pagination,
-  single-page search, query-preset shelves, and definitive details
+  multi-megabyte original itself, homepage and category pagination, real
+  search matching its query through a fresh, non-repeating page two on
+  the load-more walk, query-preset shelves, and definitive details
   including a portrait-shape guard — all green against the live site.
 
 ## The Alpha Coders extension

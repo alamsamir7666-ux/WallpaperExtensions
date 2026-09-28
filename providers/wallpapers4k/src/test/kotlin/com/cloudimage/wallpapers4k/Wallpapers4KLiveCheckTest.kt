@@ -148,13 +148,31 @@ class Wallpapers4KLiveCheckTest {
         }
 
     @Test
-    fun `search answers with a single honest page`() =
+    fun `search rides the real endpoint with its hidden pager`() =
         runTest {
             assumeTrue(live())
             val page = configured().search(query = "naruto", page = 1).getOrThrow()
 
             assertTrue("expected a real batch, got ${page.wallpapers.size}", page.wallpapers.size >= 10)
-            assertTrue("the site's search has no page two", page.nextPage == null)
+            assertTrue("expected the hidden load-more walk to be offered", page.nextPage != null)
+        }
+
+    @Test
+    fun `search page two walks the load-more form with fresh items`() =
+        runTest {
+            assumeTrue(live())
+            val configured = configured()
+            val page1 = configured.search(query = "indian actress", page = 1).getOrThrow()
+            val page2 = configured.search(query = "indian actress", page = 2).getOrThrow()
+
+            assertTrue("expected page one to match the query", page1.wallpapers.size >= 10)
+            assertTrue("expected page two to serve its own batch", page2.wallpapers.isNotEmpty())
+            val ids1 = page1.wallpapers.map { it.id }.toSet()
+            assertTrue(
+                "expected fresh items on the load-more walk",
+                page2.wallpapers.none { it.id in ids1 },
+            )
+            assertTrue("expected the walk to continue past page two", page2.nextPage != null)
         }
 
     @Test
@@ -164,6 +182,7 @@ class Wallpapers4KLiveCheckTest {
             val page = configured().search(query = "nature", page = 1).getOrThrow()
 
             assertTrue("expected a real batch, got ${page.wallpapers.size}", page.wallpapers.size >= 10)
+            assertTrue("expected the shelf to paginate like the website", page.nextPage != null)
         }
 
     @Test

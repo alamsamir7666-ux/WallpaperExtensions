@@ -101,6 +101,12 @@ internal object Wallpapers4KParser {
     /** A page number inside a query string, after entity unescaping. */
     private val PAGE_IN_QUERY = Regex("""[?&]page=(\d+)""")
 
+    /** The current-page marker inside a pages bar — `<strong class="active" …>`. */
+    private val ACTIVE_PAGE = Regex("""<strong\b[^>]*\bclass=["'][^"']*\bactive\b[^"']*["'][^>]*>""")
+
+    /** A page number attribute inside the bar: `data-page="N"`, any attribute order. */
+    private val DATA_PAGE = Regex("""data-page=["'](\d+)["']""")
+
     /** The wallpaper page path shape: `/{category}/{slug}-{id}.html`. */
     private val DETAIL_SHAPE = Regex("""^/[^/?#]+/[^/?#]+-\d+\.html$""")
 
@@ -185,8 +191,7 @@ internal object Wallpapers4KParser {
      * authoritative "more exists" signal. The link is absent on the last
      * page (verified live), and past-the-end page requests repeat the last
      * page's content, so blindly incrementing would loop the final batch
-     * forever; this is the stopper. Search pages carry no bar at all, which
-     * reads as "nothing more" — they are single-page by design.
+     * forever; this is the stopper.
      */
     fun parseNextPage(html: String): Int? {
         val bar = PAGES_BAR.find(html)?.groupValues?.get(1) ?: return null
@@ -201,6 +206,38 @@ internal object Wallpapers4KParser {
             ?.groupValues
             ?.get(1)
             ?.toIntOrNull()
+    }
+
+    /**
+     * The next page of a SEARCH results page, read from the same `p.pages`
+     * bar in its hidden, script-driven flavor: on search pages the site
+     * swaps the anchor links for bare `<strong data-page="N">` markers,
+     * hides the bar (`style="display: none"`) and lets its "Load more"
+     * button request `/search/{query}?page=N` client-side. The markers
+     * still disclose everything: the `active` strong is the page being
+     * served and the largest `data-page` is the result set's last page
+     * (verified live: `indian actress` shows 1 … 18 and the site serves
+     * distinct grids through page 18). More pages remain exactly when
+     * active < last — the JS walks the very same pair. A page without the
+     * bar (zero results) or without an active marker reads as "nothing
+     * more" — the honest stop.
+     */
+    fun parseSearchNextPage(html: String): Int? {
+        val bar = PAGES_BAR.find(html)?.groupValues?.get(1) ?: return null
+        val current =
+            ACTIVE_PAGE
+                .find(bar)
+                ?.value
+                ?.let { active -> DATA_PAGE.find(active)?.groupValues?.get(1) }
+                ?.toIntOrNull()
+                ?: return null
+        val last =
+            DATA_PAGE
+                .findAll(bar)
+                .mapNotNull { it.groupValues[1].toIntOrNull() }
+                .maxOrNull()
+                ?: return null
+        return if (current < last) current + 1 else null
     }
 
     /**
