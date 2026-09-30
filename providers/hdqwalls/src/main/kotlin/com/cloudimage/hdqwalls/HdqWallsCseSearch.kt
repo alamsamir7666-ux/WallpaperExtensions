@@ -148,26 +148,29 @@ internal object HdqWallsCseSearch {
                 ?: return null
         val results =
             runCatching {
-                element.jsonObject["results"]?.jsonArray?.mapNotNull { entry ->
+                val array = element.jsonObject["results"]?.jsonArray ?: return@runCatching null
+                array.mapNotNull { entry ->
                     val item = entry.jsonObject
                     val url = item["url"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                    val thumb = item["richSnippet"]?.jsonObject?.get("cseThumbnail")?.jsonObject
                     CseResult(
                         pageUrl = url,
                         title = item["titleNoFormatting"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                        imageUrl =
-                            item["richSnippet"]?.jsonObject
-                                ?.get("cseThumbnail")?.jsonObject
-                                ?.get("src")?.jsonPrimitive?.contentOrNull,
+                        imageUrl = thumb?.get("src")?.jsonPrimitive?.contentOrNull,
                     )
                 }
             }.getOrNull() ?: return null
         val nextStart =
             runCatching {
                 val cursor = element.jsonObject["cursor"]?.jsonObject ?: return@runCatching null
+                val pages = cursor["pages"]?.jsonArray ?: emptyList()
                 val starts =
-                    cursor["pages"]?.jsonArray
-                        ?.mapNotNull { page -> page.jsonObject["start"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() }
-                        ?: emptyList()
+                    pages.mapNotNull { page ->
+                        page.jsonObject["start"]
+                            ?.jsonPrimitive
+                            ?.contentOrNull
+                            ?.toIntOrNull()
+                    }
                 starts.filter { it > start }.minOrNull()
             }.getOrNull()
         return CsePage(results, nextStart)
@@ -186,8 +189,7 @@ internal object HdqWallsCseSearch {
      * the site parser's trailing `Wallpaper` strip — the same cleanup a
      * grid title gets.
      */
-    fun cleanTitle(title: String): String =
-        SITE_BRANDING.replace(title.trim(), "").trim().let(HdqWallsParser::cleanTitle)
+    fun cleanTitle(title: String): String = SITE_BRANDING.replace(title.trim(), "").trim().let(HdqWallsParser::cleanTitle)
 
     /**
      * The JSONP envelope off: the payload is everything from the first

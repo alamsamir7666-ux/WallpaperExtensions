@@ -128,7 +128,10 @@ class HdqWallsCseSearchTest {
 
     @Test
     fun `pageSlug maps hdqwalls pages only`() {
-        assertEquals("beautiful-indian-actress-wallpaper", HdqWallsCseSearch.pageSlug("https://hdqwalls.com/beautiful-indian-actress-wallpaper"))
+        assertEquals(
+            "beautiful-indian-actress-wallpaper",
+            HdqWallsCseSearch.pageSlug("https://hdqwalls.com/beautiful-indian-actress-wallpaper"),
+        )
         assertEquals("gone-wallpaper", HdqWallsCseSearch.pageSlug("https://hdqwalls.com/gone-wallpaper?utm=x"))
         assertNull(HdqWallsCseSearch.pageSlug("https://www.google.com/search?q=cross+link"))
         assertNull(HdqWallsCseSearch.pageSlug("not a url"))

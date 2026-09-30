@@ -155,7 +155,7 @@ class HdqWallsLiveCheckTest {
             )
             val first = page1.wallpapers.first()
             assertTrue(first.id.endsWith("-wallpaper"))
-            assertTrue(first.thumbUrl!!.startsWith("https://images.hdqwalls.com/wallpapers/"))
+            assertTrue(first.thumbUrl.startsWith("https://images.hdqwalls.com/wallpapers/"))
             assertTrue(first.fullUrl.startsWith("https://images.hdqwalls.com/wallpapers/"))
 
             // The fallback page continues: the cursor (CSE tier) or the
