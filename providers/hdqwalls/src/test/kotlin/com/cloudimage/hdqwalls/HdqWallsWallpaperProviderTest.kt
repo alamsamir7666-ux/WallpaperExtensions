@@ -19,8 +19,9 @@ import org.junit.Test
  * resolution/author/size/tags, the host-vocabulary routing — and the
  * three-tier search fallback: the site's DB-miss page (captured live),
  * the Google CSE bootstrap/element flow it embeds, cursor pagination,
- * snippet-vs-page resolution, the per-word degradation tier, and the
- * honest-empty floor — all covered without a network.
+ * snippet-vs-page resolution, the listing-page and non-definitive-record
+ * guards, the per-word degradation tier, and the honest-empty floor —
+ * all covered without a network.
  */
 class HdqWallsWallpaperProviderTest {
     private val provider = HdqWallsWallpaperProvider()
@@ -194,6 +195,117 @@ class HdqWallsWallpaperProviderTest {
             </footer></blockquote>
             <a id='dynamic_resolution' href='#' data-original-url='https://images.hdqwalls.com/wallpapers/beautiful-indian-actress-zz.jpg' rel='nofollow' class='btn btn-light'></a>
             <a href='https://images.hdqwalls.com/wallpapers/beautiful-indian-actress-zz.jpg?dl=1' download rel='nofollow' class='btn btn-light' id='dl_original'> Download Original (2.10MB) </a>
+        </div>
+        </body></html>
+        """.trimIndent()
+
+    /**
+     * The engine's answer when its web results are the site's own listing
+     * pages — the poison shape: tag, category and search pages Google
+     * freely interleaves with wallpaper pages (the tag page even carries
+     * a rich snippet, its og:image `thumb/` crop).
+     */
+    private val cseListingResults =
+        """
+        /*O_o*/
+        google.search.cse.api682738492({
+         "results": [
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/girls-wallpapers",
+           "title": "Girls Wallpapers - hdqwalls",
+           "titleNoFormatting": "Girls Wallpapers - hdqwalls",
+           "richSnippet": {"cseThumbnail": {"src": "https://images.hdqwalls.com/wallpapers/thumb/hannah-einbinder-dj.jpg"}},
+           "content": "Browse girls wallpapers..."},
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/celebrities-wallpapers",
+           "titleNoFormatting": "Celebrities Wallpapers - hdqwalls"},
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/search?q=indian+actress",
+           "titleNoFormatting": "Search indian actress - hdqwalls"}
+         ],
+         "cursor": {"pages": [{"start": "0", "label": "1"}]}
+        });
+        """.trimIndent()
+
+    /**
+     * One result whose rich snippet volunteers a `thumb/` preview — the
+     * listing pages' `og:image` shape — instead of a real original.
+     */
+    private val cseThumbSnippetResults =
+        """
+        /*O_o*/
+        google.search.cse.api682738492({
+         "results": [
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/indian-actress-smile-wallpaper",
+           "title": "Indian Actress Smile Wallpaper - hdqwalls",
+           "titleNoFormatting": "Indian Actress Smile Wallpaper - hdqwalls",
+           "richSnippet": {"cseThumbnail": {"src": "https://images.hdqwalls.com/wallpapers/thumb/indian-actress-smile-qq.jpg"}},
+           "content": "Download Indian Actress Smile Wallpaper..."}
+         ],
+         "cursor": {"pages": [{"start": "0", "label": "1"}]}
+        });
+        """.trimIndent()
+
+    /**
+     * One result whose slug is wallpaper-shaped but whose page carries
+     * no Original Resolution line — the content-level poison a slug
+     * alone cannot catch.
+     */
+    private val cseNoResolutionResults =
+        """
+        /*O_o*/
+        google.search.cse.api682738492({
+         "results": [
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/some-page-wallpaper",
+           "titleNoFormatting": "Some Page - hdqwalls"}
+         ],
+         "cursor": {"pages": [{"start": "0", "label": "1"}]}
+        });
+        """.trimIndent()
+
+    /**
+     * A page that parses only through [HdqWallsParser.parseDetail]'s
+     * og:image fallback — the listing shape: no Original Resolution line,
+     * a `thumb/` preview as its image (verified live on the tag pages).
+     */
+    private val pageWithoutResolution =
+        """
+        <html><head>
+        <meta property="og:image" content="https://images.hdqwalls.com/wallpapers/thumb/hannah-einbinder-dj.jpg">
+        </head><body>
+        <div class="container content">
+            <div class='wall-resp col-lg-4 col-md-4 col-sm-4 col-xs-6 column_padding'>
+              <a href='https://hdqwalls.com/hannah-einbinder-wallpaper' title='Hannah Einbinder Wallpaper'>
+                  <img width='602' height='339' src='https://images.hdqwalls.com/wallpapers/bthumb/hannah-einbinder-dj.jpg' title='Hannah Einbinder Wallpaper' alt='Hannah Einbinder Wallpaper' class='thumbnail img-responsive custom_width'>
+              </a>
+            </div>
+        </div>
+        </body></html>
+        """.trimIndent()
+
+    /**
+     * The smile wallpaper's page — the same definitive shape as
+     * [cseDetailBeautiful], for the snippet-fallback route.
+     */
+    private val cseDetailSmile =
+        """
+        <html><head>
+        <meta property="og:image" content="https://images.hdqwalls.com/wallpapers/indian-actress-smile-qq.jpg">
+        </head><body>
+        <div class="col-xs-12 col-lg-12 col-md-12 col-sm-12 zero">
+            <a href='https://images.hdqwalls.com/wallpapers/indian-actress-smile-qq.jpg' title='Download Indian Actress Smile Wallpaper' target='_blank'>
+              <img src='https://images.hdqwalls.com/download/indian-actress-smile-qq-1366x768.jpg'
+              width='1366' height='768'
+              class='d_img_holder img-responsive center-block zero_padding'
+              alt='Indian Actress Smile Wallpaper'
+              title='Indian Actress Smile Wallpaper'></a>
+            <blockquote><footer>Published on March 3, 2026 | Original Resolution:<a href='https://images.hdqwalls.com/wallpapers/indian-actress-smile-qq.jpg' class='btn-link btn-link_a' target='_blank'> 1920x1080</a> | Author :
+               <a href='https://www.instagram.com/author/' target='_blank' class='btn-link btn-link_a'><i> someauthor</i></a>
+            </footer></blockquote>
+            <a id='dynamic_resolution' href='#' data-original-url='https://images.hdqwalls.com/wallpapers/indian-actress-smile-qq.jpg' rel='nofollow' class='btn btn-light'></a>
+            <a href='https://images.hdqwalls.com/wallpapers/indian-actress-smile-qq.jpg?dl=1' download rel='nofollow' class='btn btn-light' id='dl_original'> Download Original (1.23MB) </a>
         </div>
         </body></html>
         """.trimIndent()
@@ -521,6 +633,81 @@ class HdqWallsWallpaperProviderTest {
         }
 
     @Test
+    fun `cse results that address listing pages drop without a fetch`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                        "https://cse.google.com/cse/element/v1" to ok(cseListingResults),
+                        // The word tier tries both words; both answer empty.
+                        "https://hdqwalls.com/search?q=actress" to ok(emptySearchPage),
+                        "https://hdqwalls.com/search?q=indian" to ok(emptySearchPage),
+                    ),
+                )
+
+            val page = provider.search(query = "indian actress", page = 1).getOrThrow()
+
+            // Tag, category and search pages are not wallpapers: the slug
+            // guard drops them before any page fetch fires — not even
+            // their rich-snippet thumb previews are trusted.
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+            assertTrue(client.requests.none { it.contains("girls-wallpapers") })
+            assertTrue(client.requests.none { it.contains("celebrities-wallpapers") })
+        }
+
+    @Test
+    fun `cse page fetches without the definitive record drop`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                        "https://cse.google.com/cse/element/v1" to ok(cseNoResolutionResults),
+                        "https://hdqwalls.com/some-page-wallpaper" to ok(pageWithoutResolution),
+                        "https://hdqwalls.com/search?q=actress" to ok(emptySearchPage),
+                        "https://hdqwalls.com/search?q=indian" to ok(emptySearchPage),
+                    ),
+                )
+
+            val page = provider.search(query = "indian actress", page = 1).getOrThrow()
+
+            // The page WAS fetched — a wallpaper-shaped slug is not
+            // proof: only the Original Resolution line is, and this page
+            // carries none (its og:image is a thumb/ crop).
+            assertTrue(client.requests.contains("https://hdqwalls.com/some-page-wallpaper"))
+            assertTrue(page.wallpapers.isEmpty())
+        }
+
+    @Test
+    fun `a rich snippet volunteering a thumb preview falls back to the page record`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                        "https://cse.google.com/cse/element/v1" to ok(cseThumbSnippetResults),
+                        "https://hdqwalls.com/indian-actress-smile-wallpaper" to ok(cseDetailSmile),
+                    ),
+                )
+
+            val page = provider.search(query = "indian actress", page = 1).getOrThrow()
+
+            assertEquals(1, page.wallpapers.size)
+            val resolved = page.wallpapers.first()
+            assertEquals("indian-actress-smile-wallpaper", resolved.id)
+            // The page's definitive original — NOT the snippet's thumb
+            // preview, which is not an original shape.
+            assertEquals("https://images.hdqwalls.com/wallpapers/indian-actress-smile-qq.jpg", resolved.fullUrl)
+            assertEquals("https://images.hdqwalls.com/wallpapers/bthumb/indian-actress-smile-qq.jpg", resolved.thumbUrl)
+            assertTrue(client.requests.contains("https://hdqwalls.com/indian-actress-smile-wallpaper"))
+        }
+
+    @Test
     fun `the cse tier stops at its page cap and lets the words answer`() =
         runTest {
             val client =
@@ -758,5 +945,38 @@ class HdqWallsWallpaperProviderTest {
         assertEquals("The Batman Devil In The Night", HdqWallsParser.cleanTitle("The Batman Devil In The Night Wallpaper"))
         assertEquals("Lowercase Suffix", HdqWallsParser.cleanTitle("Lowercase Suffix wallpaper"))
         assertEquals("Already Clean", HdqWallsParser.cleanTitle("Already Clean"))
+    }
+
+    @Test
+    fun `page slugs end in the singular wallpaper suffix`() {
+        assertEquals("foo-wallpaper", HdqWallsParser.pageSlug("https://hdqwalls.com/foo-wallpaper"))
+        assertEquals("foo-wallpaper", HdqWallsParser.pageSlug("/foo-wallpaper"))
+        // The listing shapes: plural suffixes, or none at all.
+        assertNull(HdqWallsParser.pageSlug("https://hdqwalls.com/girls-wallpapers"))
+        assertNull(HdqWallsParser.pageSlug("https://hdqwalls.com/search"))
+        assertNull(HdqWallsParser.pageSlug("https://hdqwalls.com/category/anime-wallpapers"))
+    }
+
+    @Test
+    fun `secondhand image urls reject thumb previews`() {
+        // The original's exact shape: accepted, bthumb mapped to it.
+        assertEquals(
+            "https://images.hdqwalls.com/wallpapers/hannah-einbinder-dj.jpg",
+            HdqWallsParser.siteOriginalUrl("https://images.hdqwalls.com/wallpapers/hannah-einbinder-dj.jpg"),
+        )
+        assertEquals(
+            "https://images.hdqwalls.com/wallpapers/hannah-einbinder-dj.jpg",
+            HdqWallsParser.siteOriginalUrl("https://images.hdqwalls.com/wallpapers/bthumb/hannah-einbinder-dj.jpg"),
+        )
+        assertEquals(
+            "https://images.hdqwalls.com/wallpapers/bthumb/hannah-einbinder-dj.jpg",
+            HdqWallsParser.toThumbUrl("https://images.hdqwalls.com/wallpapers/hannah-einbinder-dj.jpg"),
+        )
+        // The listing pages' og:image volunteers a thumb/ crop — rejected
+        // (rewriting it into bthumb/thumb/… would 500 on the CDN),
+        // alongside Google-proxied previews and foreign hosts.
+        assertNull(HdqWallsParser.siteOriginalUrl("https://images.hdqwalls.com/wallpapers/thumb/hannah-einbinder-dj.jpg"))
+        assertNull(HdqWallsParser.toThumbUrl("https://images.hdqwalls.com/wallpapers/thumb/hannah-einbinder-dj.jpg"))
+        assertNull(HdqWallsParser.siteOriginalUrl("https://encrypted-tbn0.gstatic.com/images?q=tbn:x"))
     }
 }

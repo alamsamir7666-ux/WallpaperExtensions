@@ -5,6 +5,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlin.random.Random
 
 /**
  * The Google Programmable Search tier of [HdqWallsWallpaperProvider] — the
@@ -29,11 +30,17 @@ import kotlinx.serialization.json.jsonPrimitive
  * 1. `cse.google.com/cse.js?cx={id}` answers a few KB of JS whose config
  *    blob carries `"cse_token": "{base64}:{epoch-ms}"` — minted per
  *    bootstrap, minutes-lived.
- * 2. `cse.google.com/cse/element/v1?cx={id}&q={query}&start={offset}` +
- *    that token answers the engine's web results as JSON — the exact call
- *    the site's embedded element makes (and the reason the site's Web tab
- *    shows results while its Images tab does not: this engine indexes
- *    pages, not image files).
+ * 2. `cse.google.com/cse/element/v1` answers the engine's web results —
+ *    requested exactly the way the site's embedded element requests it
+ *    (read from the element's own shipped `cse_element__en.js`):
+ *    `rsz=filtered_cse`, `num=10`, `hl=en`, `source=gcsc`, the engine id,
+ *    the query, the safe setting, the token as `cse_tok` (NOT `token` —
+ *    the element's own parameter name), the bootstrap's
+ *    `cselibv`/`exp`/`fexp` when present, the result offset, the
+ *    embedding page as `rurl`, and a JSONP callback — so the answer
+ *    arrives envelope-wrapped, which the reader strips (and the reason
+ *    the site's Web tab shows results while its Images tab does not:
+ *    this engine indexes pages, not image files).
  *
  * The token is fetched fresh per fallback invocation rather than cached:
  * it is minutes-lived, the bootstrap is a few KB, and the fallback only
@@ -79,6 +86,24 @@ internal object HdqWallsCseSearch {
         val nextStart: Int?,
     )
 
+    /**
+     * The engine config the bootstrap answers — everything the element's
+     * own results request rides besides the query itself. The token is
+     * required (a bootstrap without it answers no config); the version
+     * and experiment flags are optional passengers the element forwards
+     * when its config volunteers them.
+     */
+    data class EngineConfig(
+        /** The bootstrap's `cse_token` — minutes-lived, minted per bootstrap. */
+        val cseToken: String,
+        /** The bootstrap's `cselibVersion`, forwarded as `cselibv`. */
+        val cselibVersion: String?,
+        /** The bootstrap's `exp` array, comma-joined. */
+        val exp: String?,
+        /** The bootstrap's `fexp` array, comma-joined. */
+        val fexp: String?,
+    )
+
     /** The engine the site embeds on every DB-miss search (captured live). */
     const val ENGINE_ID = "partner-pub-9257850376806437:3940322700"
 
@@ -88,11 +113,44 @@ internal object HdqWallsCseSearch {
     /** The element API that serves the engine's web results. */
     private const val RESULTS_URL = "https://cse.google.com/cse/element/v1"
 
-    /** Results per page — the element's own default, one request per page. */
+    /** Results per page — the element's own default for `filtered_cse`, one request per page. */
     const val PAGE_SIZE = 10
+
+    /** The site's configured result set size — deduplicated results. */
+    private const val RESULT_SET_SIZE = "filtered_cse"
+
+    /** The element's fixed language and source identifiers. */
+    private const val LANGUAGE = "en"
+    private const val SOURCE = "gcsc"
+
+    /**
+     * The safe setting: the site's own element activates safe search; the
+     * provider keeps it off for recall — a result only matters once it
+     * resolves to a hdqwalls wallpaper page, so the filter costs nothing.
+     */
+    private const val SAFE = "off"
+
+    /** The embedding page the element reports — the site's search page. */
+    private const val SEARCH_PAGE = "https://hdqwalls.com/search"
+
+    /**
+     * The JSONP callback, the element's own scheme: `google.search.cse.`
+     * + `api` + random digits (`Math.random() * 2E4` in the element's own
+     * code). The envelope is stripped by [parseResults], never evaluated —
+     * the name just has to look like one of the element's.
+     */
+    private const val CALLBACK_PREFIX = "google.search.cse.api"
+    private const val CALLBACK_SPACE = 20_000
 
     /** The bootstrap config's token key. Not `token` — `cse_token`. */
     private val TOKEN = Regex(""""cse_token"\s*:\s*"([^"]+)"""")
+
+    /** The bootstrap config's element library version key. */
+    private val CSELIB_VERSION = Regex(""""cselibVersion"\s*:\s*"([^"]+)"""")
+
+    /** The bootstrap config's experiment arrays — strings and numbers respectively. */
+    private val EXP = Regex(""""exp"\s*:\s*\[([^\]]*)\]""")
+    private val FEXP = Regex(""""fexp"\s*:\s*\[([^\]]*)\]""")
 
     /** The trailing branding a result title carries (verified live). */
     private val SITE_BRANDING = Regex("""\s*[-|]\s*hdqwalls\s*$""", RegexOption.IGNORE_CASE)
@@ -108,28 +166,66 @@ internal object HdqWallsCseSearch {
     fun extractToken(bootstrapJs: String): String? = TOKEN.find(bootstrapJs)?.groupValues?.get(1)
 
     /**
-     * The results call for one page: `start` is a zero-based result offset
-     * (page N begins at `(N-1) * [PAGE_SIZE]`), the engine ID arrives
-     * form-encoded (`:` as `%3A`, as the element itself sends it), and the
-     * freshly minted bootstrap token rides last.
+     * The engine config out of the bootstrap's JS: the token (required),
+     * plus the version and experiment flags the element forwards on its
+     * results requests. Null when the token is missing — the tier then
+     * fails and the provider degrades.
+     */
+    fun parseBootstrap(bootstrapJs: String): EngineConfig? {
+        val token = extractToken(bootstrapJs) ?: return null
+        return EngineConfig(
+            cseToken = token,
+            cselibVersion = CSELIB_VERSION.find(bootstrapJs)?.groupValues?.get(1),
+            exp = csv(EXP.find(bootstrapJs)?.groupValues?.get(1)),
+            fexp = csv(FEXP.find(bootstrapJs)?.groupValues?.get(1)),
+        )
+    }
+
+    /** A config array's body (`"a", "b"` or `1, 2`) to a comma-joined string, quotes stripped. */
+    private fun csv(body: String?): String? =
+        body
+            ?.split(',')
+            ?.map { it.trim().trim('"') }
+            ?.filter { it.isNotEmpty() }
+            ?.takeIf { it.isNotEmpty() }
+            ?.joinToString(",")
+
+    /**
+     * The results call for one page, the wire shape the site's own element
+     * sends (read from its shipped `cse_element__en.js`): `rsz` and `num`
+     * from the site's config, `hl` and `source=gcsc` fixed by the element,
+     * the engine id and the token form-encoded (the token is base64 — a
+     * raw `+` would read as a space; and its parameter name is `cse_tok`,
+     * NOT `token`), the bootstrap's `cselibv`/`exp`/`fexp` forwarded when
+     * present, the zero-based result offset in `start` (page N begins at
+     * `(N-1) * [PAGE_SIZE]`), the embedding search page as `rurl`, and the
+     * JSONP callback last — the answer arrives envelope-wrapped, which
+     * [parseResults] strips. Every value rides percent-encoded, exactly
+     * as the element's own URLSearchParams encodes them.
      */
     fun resultsUrl(
         encodedQuery: String,
         start: Int,
-        token: String,
+        config: EngineConfig,
     ): String =
         RESULTS_URL +
-            "?cx=" + java.net.URLEncoder.encode(ENGINE_ID, Charsets.UTF_8.name()) +
-            "&q=$encodedQuery" +
+            "?rsz=$RESULT_SET_SIZE" +
             "&num=$PAGE_SIZE" +
+            "&hl=$LANGUAGE" +
+            "&source=$SOURCE" +
+            "&cx=" + enc(ENGINE_ID) +
+            "&q=$encodedQuery" +
+            "&safe=$SAFE" +
+            "&cse_tok=" + enc(config.cseToken) +
+            (config.cselibVersion?.let { "&cselibv=" + enc(it) } ?: "") +
+            (config.exp?.let { "&exp=" + enc(it) } ?: "") +
+            (config.fexp?.let { "&fexp=" + enc(it) } ?: "") +
             "&start=$start" +
-            "&safe=off" +
-            "&cse_lang=en" +
-            "&origin=unknown" +
-            "&client=google-csse" +
-            "&ie=utf-8" +
-            "&oe=utf-8" +
-            "&token=$token"
+            "&rurl=" + enc("$SEARCH_PAGE?q=$encodedQuery") +
+            "&callback=$CALLBACK_PREFIX" + Random.nextInt(CALLBACK_SPACE)
+
+    /** Query encoding, matching the element's URLSearchParams: `:` as `%3A`, `+` as `%2B`. */
+    private fun enc(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
 
     /**
      * The engine's answer, JSONP-wrapped or bare, to a [CsePage]: every
@@ -178,8 +274,11 @@ internal object HdqWallsCseSearch {
 
     /**
      * A result URL to its wallpaper page slug, via the site parser's own
-     * reader — anything not a hdqwalls.com page (Google sometimes appends
-     * query-string cross-links) answers null and the item drops.
+     * reader — anything not a hdqwalls.com WALLPAPER page answers null and
+     * the item drops: foreign pages (Google sometimes appends query-string
+     * cross-links) and the site's own listing pages alike, whose plural
+     * `-wallpapers` slugs the reader rejects (see
+     * [HdqWallsParser.pageSlug]).
      */
     fun pageSlug(resultUrl: String): String? = HdqWallsParser.pageSlug(resultUrl)
 

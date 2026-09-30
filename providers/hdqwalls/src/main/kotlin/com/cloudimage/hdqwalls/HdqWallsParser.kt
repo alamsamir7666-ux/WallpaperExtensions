@@ -117,6 +117,12 @@ internal object HdqWallsParser {
     /** The trailing label every grid title carries. */
     private val WALLPAPER_SUFFIX = Regex("""\s+Wallpaper$""", RegexOption.IGNORE_CASE)
 
+    /**
+     * The suffix every wallpaper page slug ends with — singular. See
+     * [pageSlug] for why the suffix is the page-kind discriminator.
+     */
+    private const val WALLPAPER_SLUG_SUFFIX = "-wallpaper"
+
     private const val IMAGE_CDN = "https://images.hdqwalls.com/wallpapers/"
 
     /**
@@ -254,7 +260,17 @@ internal object HdqWallsParser {
             .toList()
     }
 
-    /** `https://hdqwalls.com/{slug}-wallpaper` (or site-relative) to the slug itself; anything else is null. */
+    /**
+     * `https://hdqwalls.com/{slug}-wallpaper` (or site-relative) to the
+     * slug itself; anything else is null. Only the SINGULAR `-wallpaper`
+     * suffix addresses a wallpaper page: the site's tag, category and
+     * resolution listings all use the plural (`girls-wallpapers`,
+     * `celebrities-wallpapers`, `1080x1920-resolution-wallpapers` —
+     * verified live), and its utility pages carry no suffix (`search`) —
+     * so the suffix is the discriminator. The grid's own anchors always
+     * carry it; the rule matters most for the Google CSE tier, whose web
+     * results interleave listing pages with wallpaper pages.
+     */
     fun pageSlug(href: String): String? {
         val path =
             when {
@@ -263,7 +279,7 @@ internal object HdqWallsParser {
                 else -> return null
             }
         val slug = path.substringBefore('?').substringBefore('#').trim('/')
-        return slug.takeIf { it.isNotEmpty() && !it.contains('/') }
+        return slug.takeIf { it.endsWith(WALLPAPER_SLUG_SUFFIX) && !it.contains('/') }
     }
 
     /**
@@ -278,26 +294,48 @@ internal object HdqWallsParser {
             .takeIf { it.startsWith(IMAGE_CDN + "bthumb/") }
             ?.replaceFirst("/wallpapers/bthumb/", "/wallpapers/")
 
-    /** The preview URL of an original: the same file back under `bthumb`. */
+    /**
+     * The preview URL of an original: the same file back under `bthumb`.
+     * Anything not the original's exact shape — a `thumb/` preview, a
+     * foreign host, a fragment — answers null: the site's listing pages
+     * volunteer `thumb/` crops (verified live: ~12KB against the original's
+     * megabytes), and rewriting one into `bthumb/thumb/…` produces a URL
+     * the CDN answers with HTTP 500.
+     */
     fun toThumbUrl(originalUrl: String): String? =
         originalUrl
-            .takeIf { it.startsWith(IMAGE_CDN) && !it.contains("/bthumb/") }
+            .substringBefore('#')
+            .takeIf(::isOriginalShape)
             ?.replaceFirst("/wallpapers/", "/wallpapers/bthumb/")
 
     /**
      * Any site CDN URL — a `/wallpapers/` original or its `/wallpapers/bthumb/`
      * preview — to the original it discloses, for callers that receive image
      * URLs secondhand (the Google CSE tier's rich-snippet thumbnails, which
-     * are often the page's `og:image`). Anything else — Google-proxied
-     * previews, foreign hosts, fragments — answers null: the caller then
-     * fetches the wallpaper page itself instead of trusting the shortcut.
+     * are often the page's `og:image`). The listing pages' `og:image`
+     * volunteers a `thumb/` preview — a small crop, NOT the original — and
+     * is rejected alongside Google-proxied previews (`encrypted-tbn…`),
+     * foreign hosts and fragments: the caller then fetches the wallpaper
+     * page itself instead of trusting the shortcut.
      */
     fun siteOriginalUrl(url: String): String? =
         when {
             url.startsWith(IMAGE_CDN + "bthumb/") -> toOriginalUrl(url)
-            url.startsWith(IMAGE_CDN) -> url.substringBefore('#')
-            else -> null
+            else -> url.substringBefore('#').takeIf(::isOriginalShape)
         }
+
+    /**
+     * The original's exact shape: the CDN root, then a bare filename —
+     * `…/wallpapers/{file}.jpg`, nothing between. The CDN also serves
+     * PREVIEW variants in sibling directories (`bthumb/` for grid cards,
+     * `thumb/` for listing `og:image`s), and only a directory-free
+     * remainder separates an original from every one of them.
+     */
+    private fun isOriginalShape(url: String): Boolean {
+        if (!url.startsWith(IMAGE_CDN)) return false
+        val file = url.removePrefix(IMAGE_CDN).substringBefore('#')
+        return file.isNotEmpty() && '/' !in file
+    }
 
     /** Grid titles all end in `Wallpaper`; the display title is what precedes it. */
     fun cleanTitle(title: String): String = WALLPAPER_SUFFIX.replace(title.trim(), "").trim()

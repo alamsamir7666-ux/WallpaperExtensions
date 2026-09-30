@@ -8,13 +8,14 @@ import org.junit.Test
 /**
  * The Google CSE tier's parsing half, over shapes captured from the live
  * flow: the bootstrap config blob's `cse_token` (the key is `cse_token`,
- * NOT `token` — captured from the real `cse.js`), the element API's
- * JSONP-wrapped and bare-JSON answers, the cursor's page offsets, and the
- * result-to-wallpaper mapping readers. The JSONP fixture mirrors what the
- * element answers on the wire (including its `O_o` banner, callback
- * wrapper and `\u0000cc`-style escapes); every defensive edge — Google's
- * rate-limit apology page, empty bodies, foreign hosts — degrades to
- * nulls, never exceptions.
+ * NOT `token` — captured from the real `cse.js`) and its `cselibVersion`/
+ * `exp`/`fexp` passengers, the element API's JSONP-wrapped and bare-JSON
+ * answers, the cursor's page offsets, and the result-to-wallpaper mapping
+ * readers. The JSONP fixture mirrors what the element answers on the wire
+ * (including its `O_o` banner, callback wrapper and `\u0000cc`-style
+ * escapes); every defensive edge — Google's rate-limit apology page, empty
+ * bodies, foreign hosts, the listing pages its web results interleave —
+ * degrades to nulls, never exceptions.
  */
 class HdqWallsCseSearchTest {
     /** The bootstrap config blob, trimmed from the live cse.js capture. */
@@ -26,6 +27,9 @@ class HdqWallsCseSearchTest {
           "cse_token": "AHbIdTg_d1nKRAMULV0AfMi-g_HA:1790741990673",
           "isHostedPage": false,
           "cseLang": "en",
+          "exp": ["cc", "sps", "esbfa"],
+          "cselibVersion": "3735a6ee3000c0cb",
+          "fexp": [121877337, 122056044, 121877336, 122056045],
           "searchbox": {"backgroundColor": "#FFFFFF"},
           "theme": "light"
         }
@@ -71,6 +75,29 @@ class HdqWallsCseSearchTest {
     fun `extractToken answers null on foreign or missing configs`() {
         assertNull(HdqWallsCseSearch.extractToken("no config blob here"))
         assertNull(HdqWallsCseSearch.extractToken("""{"cx": "partner-pub"}"""))
+    }
+
+    @Test
+    fun `parseBootstrap reads the engine config out of the bootstrap blob`() {
+        val config = HdqWallsCseSearch.parseBootstrap(bootstrapJs)!!
+
+        assertEquals("AHbIdTg_d1nKRAMULV0AfMi-g_HA:1790741990673", config.cseToken)
+        assertEquals("3735a6ee3000c0cb", config.cselibVersion)
+        assertEquals("cc,sps,esbfa", config.exp)
+        assertEquals("121877337,122056044,121877336,122056045", config.fexp)
+    }
+
+    @Test
+    fun `parseBootstrap answers null without a token and tolerates missing passengers`() {
+        assertNull(HdqWallsCseSearch.parseBootstrap("no config blob here"))
+        assertNull(HdqWallsCseSearch.parseBootstrap("""{"cx": "partner-pub"}"""))
+        // The version and experiment flags forward only when the config
+        // volunteers them — a token-only bootstrap still parses.
+        val bare = HdqWallsCseSearch.parseBootstrap("""{"cse_token": "AHbIdT:1"}""")!!
+        assertEquals("AHbIdT:1", bare.cseToken)
+        assertNull(bare.cselibVersion)
+        assertNull(bare.exp)
+        assertNull(bare.fexp)
     }
 
     // --------------------------------------------------------------- results
@@ -127,7 +154,7 @@ class HdqWallsCseSearchTest {
     // ---------------------------------------------------------------- mapping
 
     @Test
-    fun `pageSlug maps hdqwalls pages only`() {
+    fun `pageSlug maps hdqwalls wallpaper pages only`() {
         assertEquals(
             "beautiful-indian-actress-wallpaper",
             HdqWallsCseSearch.pageSlug("https://hdqwalls.com/beautiful-indian-actress-wallpaper"),
@@ -135,6 +162,13 @@ class HdqWallsCseSearchTest {
         assertEquals("gone-wallpaper", HdqWallsCseSearch.pageSlug("https://hdqwalls.com/gone-wallpaper?utm=x"))
         assertNull(HdqWallsCseSearch.pageSlug("https://www.google.com/search?q=cross+link"))
         assertNull(HdqWallsCseSearch.pageSlug("not a url"))
+        // The listing shapes Google's web results interleave: tag, category
+        // and resolution pages use the PLURAL suffix, the search page none.
+        assertNull(HdqWallsCseSearch.pageSlug("https://hdqwalls.com/girls-wallpapers"))
+        assertNull(HdqWallsCseSearch.pageSlug("https://hdqwalls.com/celebrities-wallpapers"))
+        assertNull(HdqWallsCseSearch.pageSlug("https://hdqwalls.com/1080x1920-resolution-wallpapers"))
+        assertNull(HdqWallsCseSearch.pageSlug("https://hdqwalls.com/search?q=indian+actress"))
+        assertNull(HdqWallsCseSearch.pageSlug("https://hdqwalls.com/category/anime-wallpapers"))
     }
 
     @Test
@@ -152,17 +186,42 @@ class HdqWallsCseSearchTest {
 
     @Test
     fun `resultsUrl shapes the element call like the site's own element`() {
-        val url = HdqWallsCseSearch.resultsUrl("indian+actress", 10, "AHbIdTg_test:1790741990673")
+        val config = HdqWallsCseSearch.parseBootstrap(bootstrapJs)!!
+
+        val url = HdqWallsCseSearch.resultsUrl("indian+actress", 10, config)
 
         assertTrue(url.startsWith("https://cse.google.com/cse/element/v1?"))
+        // The site config's result set size and page size.
+        assertTrue(url.contains("rsz=filtered_cse"))
+        assertTrue(url.contains("num=10"))
+        // The element's fixed identifiers.
+        assertTrue(url.contains("hl=en"))
+        assertTrue(url.contains("source=gcsc"))
         // The engine ID, form-encoded as the element sends it.
         assertTrue(url.contains("cx=partner-pub-9257850376806437%3A3940322700"))
         assertTrue(url.contains("q=indian+actress"))
-        // Page N is result offset (N-1) * PAGE_SIZE.
-        assertTrue(url.contains("num=10"))
-        assertTrue(url.contains("start=10"))
-        // The freshly minted bootstrap token rides last.
-        assertTrue(url.endsWith("token=AHbIdTg_test:1790741990673"))
-        assertTrue(!url.contains("&callback="))
+        assertTrue(url.contains("safe=off"))
+        // THE wire-format fix: the token rides as cse_tok — NOT token —
+        // form-encoded, and the bootstrap's passengers forward along.
+        assertTrue(url.contains("cse_tok=AHbIdTg_d1nKRAMULV0AfMi-g_HA%3A1790741990673"))
+        assertTrue(url.contains("cselibv=3735a6ee3000c0cb"))
+        assertTrue(url.contains("exp=cc%2Csps%2Cesbfa"))
+        assertTrue(url.contains("fexp=121877337%2C122056044%2C121877336%2C122056045"))
+        // Page N is result offset (N-1) * PAGE_SIZE; the embedding search
+        // page reports itself as rurl.
+        assertTrue(url.contains("&start=10&"))
+        assertTrue(url.contains("rurl=https%3A%2F%2Fhdqwalls.com%2Fsearch%3Fq%3Dindian%2Bactress"))
+        // The JSONP callback the element itself sends rides last.
+        assertTrue(url.substringAfterLast('&').matches(Regex("callback=google\\.search\\.cse\\.api\\d+")))
+    }
+
+    @Test
+    fun `resultsUrl encodes base64-hostile token characters`() {
+        val config = HdqWallsCseSearch.parseBootstrap(bootstrapJs)!!.copy(cseToken = "AB+CD/E:F")
+
+        val url = HdqWallsCseSearch.resultsUrl("q", 0, config)
+
+        // A raw `+` would read as a space, a raw `/` as a path separator.
+        assertTrue(url.contains("cse_tok=AB%2BCD%2FE%3AF"))
     }
 }

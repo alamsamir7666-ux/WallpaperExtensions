@@ -51,12 +51,15 @@ import java.net.URLEncoder
  *   exact condition under which the site's page embeds a Google
  *   Programmable Search Engine instead of results — the provider replays
  *   the site's fallback: the engine's web results read keylessly
- *   (bootstrap token from `cse.google.com/cse.js`, then the element API),
- *   each result's wallpaper page fetched for its true original; and when
- *   Google is unreachable (it rate-limits flagged networks), a per-word
- *   site search — the longest word first, `actress` alone still answers
- *   1,029 wallpapers — so a miss degrades to related results, never to
- *   an error.
+ *   (bootstrap config from `cse.google.com/cse.js`, then the element API
+ *   requested exactly as the site's own element requests it), each result
+ *   accepted only as a hdqwalls wallpaper page — the singular
+ *   `-wallpaper` slug — and resolved by its definitive record, so the
+ *   tag, category and search listings Google freely interleaves never
+ *   masquerade as wallpapers; and when Google is unreachable (it
+ *   rate-limits flagged networks), a per-word site search — the longest
+ *   word first, `actress` alone still answers 1,029 wallpapers — so a
+ *   miss degrades to related results, never to an error.
  * - [sections] offers fourteen shelves: Popular, Latest, Anime (a host
  *   `category` preset), Celebrities (the `people` one), and tag-style
  *   `query` presets for Girls, Cars, Superheroes, Games, Movies, Nature,
@@ -109,7 +112,7 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "HDQWalls",
-            versionName = "1.0.2",
+            versionName = "1.0.3",
             author = "Cloudimage",
             description = "HD, 4K, 5K and 8K wallpapers from hdqwalls.com - scraped, keyless.",
             // The site curates its uploads and carries no per-item rating
@@ -159,10 +162,13 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
      *    actress`, a query whose pages exist but which the DB search
      *    cannot address) is the exact condition under which the site's
      *    page embeds Google Programmable Search instead. The provider
-     *    reads that same engine keylessly: the bootstrap token, one
-     *    element-API call per page, then each result's wallpaper page
-     *    fetched for its disclosed original — the items Google's Web tab
-     *    shows, as real wallpapers.
+     *    reads that same engine keylessly: the bootstrap config, one
+     *    element-API call per page in the element's own wire shape
+     *    (`cse_tok`, JSONP callback and all), then each result accepted
+     *    only as a hdqwalls wallpaper page resolved by its definitive
+     *    record — the Original Resolution line — so Google's web results,
+     *    which freely interleave tag and category listings with wallpaper
+     *    pages, answer with real wallpapers only.
      * 3. Google unreachable (it rate-limits flagged networks with a 403
      *    apology page) or answerless: a per-word site search — the
      *    query's own stop-word-free words, longest first, up to three —
@@ -323,14 +329,15 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
     // ------------------------------------------------------------ search fallback
 
     /**
-     * The Google tier for one page: bootstrap token, one element-API call
-     * at the page's result offset, then each result resolved — its
-     * rich-snippet image when the response volunteers a real site CDN URL,
-     * its wallpaper page otherwise — into the same [Wallpaper] shape the
-     * grid serves. Sequential by contract (the host exposes no dispatcher
-     * to plugin code), capped at the page size. Any failure — token,
-     * transport, parse, Google's rate-limit apology — degrades to an
-     * empty page the chain reads as "tier failed"; never an error.
+     * The Google tier for one page: bootstrap config, one element-API call
+     * at the page's result offset — in the element's own wire shape — then
+     * each result resolved: its rich-snippet image when the response
+     * volunteers a real site CDN original, its wallpaper page otherwise,
+     * and only its definitive record at that. Sequential by contract (the
+     * host exposes no dispatcher to plugin code), capped at the page size.
+     * Any failure — token, transport, parse, Google's rate-limit apology —
+     * degrades to an empty page the chain reads as "tier failed"; never
+     * an error.
      */
     private suspend fun cseSearchPage(
         query: String,
@@ -341,11 +348,11 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
             runCatching { get(HdqWallsCseSearch.BOOTSTRAP_URL) }.getOrNull()
                 ?: return Page(emptyList(), nextPage = null)
         if (!bootstrap.isSuccessful) return Page(emptyList(), nextPage = null)
-        val token = HdqWallsCseSearch.extractToken(bootstrap.bodyText) ?: return Page(emptyList(), nextPage = null)
+        val config = HdqWallsCseSearch.parseBootstrap(bootstrap.bodyText) ?: return Page(emptyList(), nextPage = null)
         val start = (page - 1) * HdqWallsCseSearch.PAGE_SIZE
         val response =
             runCatching {
-                get(HdqWallsCseSearch.resultsUrl(encode(query), start, token))
+                get(HdqWallsCseSearch.resultsUrl(encode(query), start, config))
             }.getOrNull() ?: return Page(emptyList(), nextPage = null)
         if (!response.isSuccessful) return Page(emptyList(), nextPage = null)
         val csePage = HdqWallsCseSearch.parseResults(response.bodyText, start) ?: return Page(emptyList(), nextPage = null)
@@ -359,12 +366,24 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
     }
 
     /**
-     * One engine result to a wallpaper. The slug must be a hdqwalls page;
-     * the image comes from the result's own rich snippet when that is a
-     * real site CDN URL, and from the wallpaper page — the definitive
-     * record [details] reads — otherwise. Unresolvable results drop
-     * silently: a fallback page of three honest wallpapers beats one
-     * padded with placeholders.
+     * One engine result to a wallpaper, under the two guards a Google
+     * web result needs before it can be trusted as a wallpaper:
+     *
+     * - The slug: only the singular `-wallpaper` suffix addresses a
+     *   wallpaper page — the site's tag, category and resolution listings
+     *   all use the plural, and its search page no suffix at all, so the
+     *   suffix is the page-kind discriminator. A listing result drops
+     *   before any fetch fires.
+     * - The record: a fetched page resolves only by its DEFINITIVE shape —
+     *   the blockquote's `Original Resolution` line (the true dimensions
+     *   the listing pages do not carry; their `og:image` volunteers a
+     *   small `thumb/` crop, not an original). A snippet image still
+     *   short-circuits the fetch when it is a real site CDN original —
+     *   the bthumb/original shapes — which [HdqWallsParser.siteOriginalUrl]
+     *   already verifies.
+     *
+     * Unresolvable results drop silently: a fallback page of three honest
+     * wallpapers beats one padded with placeholders.
      */
     private suspend fun resolveCseResult(result: HdqWallsCseSearch.CseResult): Wallpaper? {
         val slug = HdqWallsCseSearch.pageSlug(result.pageUrl) ?: return null
@@ -384,6 +403,10 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
                 ?: return null
         if (!response.isSuccessful) return null
         val record = HdqWallsParser.parseDetail(response.bodyText) ?: return null
+        // The definitive record alone resolves: width arrives only from
+        // the Original Resolution line, the one marker a wallpaper page
+        // carries that no listing page does.
+        if (record.width == null || record.height == null) return null
         return Wallpaper(
             id = slug,
             providerId = ID,
