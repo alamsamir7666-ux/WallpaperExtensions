@@ -16,8 +16,11 @@ import org.junit.Test
  * with fixtures cut from the live site's markup: the shared listing grid
  * (popular, category, search), the pagination bar's Next-link contract,
  * the blank-query and deep-pagination guards, the detail record's
- * resolution/author/size/tags, and the host-vocabulary routing all stay
- * covered without a network.
+ * resolution/author/size/tags, the host-vocabulary routing — and the
+ * three-tier search fallback: the site's DB-miss page (captured live),
+ * the Google CSE bootstrap/element flow it embeds, cursor pagination,
+ * snippet-vs-page resolution, the per-word degradation tier, and the
+ * honest-empty floor — all covered without a network.
  */
 class HdqWallsWallpaperProviderTest {
     private val provider = HdqWallsWallpaperProvider()
@@ -103,6 +106,96 @@ class HdqWallsWallpaperProviderTest {
     private val lastPagePagination =
         """
         <ul class="pagination"><li><a href="https://hdqwalls.com/search?q=iphone&amp;page=1">&laquo; Previous</a></li><li><a href="https://hdqwalls.com/search?q=iphone&amp;page=1">1</a></li><li class="active"><a href="https://hdqwalls.com/search?q=iphone&amp;page=2">2</a></li></ul>
+        """.trimIndent()
+
+    // Search-fallback fixtures: the site's DB-miss page and the Google CSE
+    // flow it embeds, captured live (hdqwalls.com answers `indian actress`
+    // with zero grid cells and an embedded Programmable Search Engine).
+
+    /** The DB-miss search page: no cells, no pagination — just the CSE embed. */
+    private val emptySearchPage =
+        """
+        <div class="container content zero_padding">
+            <!-- if images are not isset than show the google search suggestions -->
+            <script async src="https://cse.google.com/cse.js?cx=partner-pub-9257850376806437:3940322700"></script>
+            <gcse:search></gcse:search>
+        </div>
+        """.trimIndent()
+
+    /** The CSE bootstrap config blob, trimmed from the live cse.js. */
+    private val cseBootstrap =
+        """
+        (function(){var relativeUrl='/cse.js?cx=partner-pub-9257850376806437:3940322700';})();
+        {
+          "cx": "partner-pub-9257850376806437:3940322700",
+          "cse_token": "AHbIdTg_d1nKRAMULV0AfMi-g_HA:1790741990673",
+          "isHostedPage": false,
+          "cseLang": "en"
+        }
+        """.trimIndent()
+
+    /**
+     * The element API's answer: two hdqwalls pages (one with a rich-snippet
+     * image, one without) and one foreign result that must drop.
+     */
+    private val cseJsonpResults =
+        """
+        /*O_o*/
+        google.search.cse.api682738492({
+         "results": [
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/beautiful-indian-actress-wallpaper",
+           "title": "Beautiful Indian Actress Wallpaper, HD Indian Celebrities 4k - hdqwalls",
+           "titleNoFormatting": "Beautiful Indian Actress Wallpaper, HD Indian Celebrities 4k - hdqwalls",
+           "content": "Download Beautiful Indian Actress Wallpaper..."},
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/indian-actress-smile-wallpaper",
+           "title": "Indian Actress Smile Wallpaper - hdqwalls",
+           "titleNoFormatting": "Indian Actress Smile Wallpaper - hdqwalls",
+           "richSnippet": {"cseThumbnail": {"src": "https://images.hdqwalls.com/wallpapers/bthumb/indian-actress-smile-qq.jpg", "width": "200"}},
+           "content": "Download Indian Actress Smile Wallpaper..."},
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://www.google.com/search?q=cross+link",
+           "title": "cross link",
+           "titleNoFormatting": "cross link"}
+         ],
+         "cursor": {"pages": [{"start": "0", "label": "1"}, {"start": "10", "label": "2"}, {"start": "20", "label": "3"}],
+          "estimatedResultCount": "3560"}
+        });
+        """.trimIndent()
+
+    /**
+     * The CSE result's wallpaper page, trimmed to the parts [HdqWallsParser.parseDetail]
+     * reads: the true-resolution blockquote, the tag row, the title holder.
+     */
+    private val cseDetailBeautiful =
+        """
+        <html><head>
+        <meta property="og:image" content="https://images.hdqwalls.com/wallpapers/beautiful-indian-actress-zz.jpg">
+        </head><body>
+        <div class="col-xs-12 col-lg-12 col-md-12 col-sm-12 zero">
+            <a href='https://images.hdqwalls.com/wallpapers/beautiful-indian-actress-zz.jpg' title='Download Beautiful Indian Actress Wallpaper' target='_blank'>
+              <img src='https://images.hdqwalls.com/download/beautiful-indian-actress-zz-1366x768.jpg'
+              width='1366' height='768'
+              class='d_img_holder img-responsive center-block zero_padding'
+              alt='Beautiful Indian Actress Wallpaper'
+              title='Beautiful Indian Actress Wallpaper'></a>
+            <div class="col-xs-12 col-lg-12 col-md-12 col-sm-12 wallpaper_detail">
+                <ul class="float_left">
+                    <li id='tags'><i class='fa fa-tags'></i></li><a title='Indian 4k Wallpapers And Images' href='https://hdqwalls.com/indian-wallpapers'>
+                <li style='float:left;'><span class='btn-link btn-link_a btn-xs'>indian-wallpapers,</span></li>
+            </a><a title='Actress 4k Wallpapers And Images' href='https://hdqwalls.com/actress-wallpapers'>
+                <li style='float:left;'><span class='btn-link btn-link_a btn-xs'>actress-wallpapers,</span></li>
+            </a>
+                </ul>
+            </div>
+            <blockquote><footer>Published on March 3, 2026 | Original Resolution:<a href='https://images.hdqwalls.com/wallpapers/beautiful-indian-actress-zz.jpg' class='btn-link btn-link_a' target='_blank'> 3840x2160</a> | Author :
+               <a href='https://www.instagram.com/author/' target='_blank' class='btn-link btn-link_a'><i> someauthor</i></a>
+            </footer></blockquote>
+            <a id='dynamic_resolution' href='#' data-original-url='https://images.hdqwalls.com/wallpapers/beautiful-indian-actress-zz.jpg' rel='nofollow' class='btn btn-light'></a>
+            <a href='https://images.hdqwalls.com/wallpapers/beautiful-indian-actress-zz.jpg?dl=1' download rel='nofollow' class='btn btn-light' id='dl_original'> Download Original (2.10MB) </a>
+        </div>
+        </body></html>
         """.trimIndent()
 
     /**
@@ -327,6 +420,168 @@ class HdqWallsWallpaperProviderTest {
             configureWith(mapOf("https://hdqwalls.com/search?q=batman" to ok(searchGrid + searchPagination)))
 
             val page = provider.search(query = "batman", page = 101).getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+        }
+
+    // ------------------------------------------------- search fallback chain
+
+    /**
+     * The DB-miss flow, end to end: the site's search answers zero cells
+     * (the live `indian actress` shape), so the provider replays the site's
+     * own fallback — bootstrap token, element API, results resolved into
+     * wallpapers. The rich-snippet item never fetches its page; the page
+     * fetch is what resolves the other; the foreign result drops.
+     */
+    @Test
+    fun `search falls back to the google cse tier when the site's db has no match`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                        "https://cse.google.com/cse/element/v1" to ok(cseJsonpResults),
+                        "https://hdqwalls.com/beautiful-indian-actress-wallpaper" to ok(cseDetailBeautiful),
+                    ),
+                )
+
+            val page = provider.search(query = "indian actress", page = 1).getOrThrow()
+
+            assertEquals(2, page.wallpapers.size)
+
+            val fetched = page.wallpapers.first()
+            assertEquals("beautiful-indian-actress-wallpaper", fetched.id)
+            assertEquals("https://images.hdqwalls.com/wallpapers/beautiful-indian-actress-zz.jpg", fetched.fullUrl)
+            assertEquals("https://images.hdqwalls.com/wallpapers/bthumb/beautiful-indian-actress-zz.jpg", fetched.thumbUrl)
+            assertEquals("Beautiful Indian Actress", fetched.title)
+            // Grid items carry no dimensions, fallback or not — the true
+            // dims stay the detail record's business.
+            assertNull(fetched.width)
+            assertNull(fetched.height)
+            // The page's own tag row, same as a grid item's would be.
+            assertEquals(listOf("indian", "actress"), fetched.tags)
+
+            val shortcut = page.wallpapers[1]
+            assertEquals("indian-actress-smile-wallpaper", shortcut.id)
+            // Resolved from the result's own rich snippet — no page fetch.
+            assertEquals("https://images.hdqwalls.com/wallpapers/indian-actress-smile-qq.jpg", shortcut.fullUrl)
+            assertEquals("https://images.hdqwalls.com/wallpapers/bthumb/indian-actress-smile-qq.jpg", shortcut.thumbUrl)
+            assertEquals("Indian Actress Smile", shortcut.title)
+            assertEquals(listOf("indian", "actress", "smile"), shortcut.tags)
+
+            // The cursor's next offset (10) reads as page 2.
+            assertEquals(2, page.nextPage)
+            assertTrue(client.requests.contains("https://hdqwalls.com/beautiful-indian-actress-wallpaper"))
+            assertTrue(client.requests.none { it.startsWith("https://hdqwalls.com/indian-actress-smile-wallpaper") })
+        }
+
+    @Test
+    fun `the cse tier paginates by result offset`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                        "https://cse.google.com/cse/element/v1" to ok(cseJsonpResults),
+                        "https://hdqwalls.com/beautiful-indian-actress-wallpaper" to ok(cseDetailBeautiful),
+                    ),
+                )
+
+            val page = provider.search(query = "indian actress", page = 2).getOrThrow()
+
+            // Page 2 is result offset 10.
+            assertTrue(client.requests.any { it.contains("&start=10") })
+            assertEquals(2, page.wallpapers.size)
+            // The cursor's next offset (20) reads as page 3.
+            assertEquals(3, page.nextPage)
+        }
+
+    @Test
+    fun `cse items without a resolvable page drop from the batch`() =
+        runTest {
+            configureWith(
+                mapOf(
+                    "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
+                    "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                    "https://cse.google.com/cse/element/v1" to ok(cseJsonpResults),
+                    // The wallpaper page is gone: its result cannot resolve.
+                    "https://hdqwalls.com/beautiful-indian-actress-wallpaper" to ProviderHttpResponse(404, emptyMap(), ByteArray(0)),
+                ),
+            )
+
+            val page = provider.search(query = "indian actress", page = 1).getOrThrow()
+
+            // The snippet-sourced item survives, the dead page's drops —
+            // a fallback page of honest wallpapers, not placeholders.
+            assertEquals(1, page.wallpapers.size)
+            assertEquals("indian-actress-smile-wallpaper", page.wallpapers.first().id)
+        }
+
+    @Test
+    fun `the cse tier stops at its page cap and lets the words answer`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
+                        "https://hdqwalls.com/search?q=actress" to ok(searchGrid + searchPagination),
+                    ),
+                )
+
+            val page = provider.search(query = "indian actress", page = 11).getOrThrow()
+
+            // Page 11 is past CSE_MAX_PAGES: no Google request fires at all,
+            // the per-word tier answers instead.
+            assertTrue(client.requests.none { it.contains("cse.google.com") })
+            assertEquals(1, page.wallpapers.size)
+        }
+
+    @Test
+    fun `search falls back to a per-word site search when the cse tier fails`() =
+        runTest {
+            val client =
+                configureWith(
+                    // Longest prefixes first: the tier-1 query URL must not
+                    // be shadowed by the single-word routes below it.
+                    mapOf(
+                        "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                        // Google's rate-limit apology — the flagged-network answer.
+                        "https://cse.google.com/cse/element/v1" to ProviderHttpResponse(403, emptyMap(), "Sorry...".toByteArray()),
+                        "https://hdqwalls.com/search?q=actress" to ok(searchGrid + searchPagination),
+                        "https://hdqwalls.com/search?q=indian" to ok(emptySearchPage),
+                    ),
+                )
+
+            val page = provider.search(query = "indian actress", page = 1).getOrThrow()
+
+            // The longest word wins: `actress` (7) outranks `indian` (6) —
+            // the route the live site answers with 1,029 wallpapers.
+            assertEquals(1, page.wallpapers.size)
+            assertEquals("batgirl-x-batman-wallpaper", page.wallpapers.first().id)
+            assertEquals(2, page.nextPage)
+            assertTrue(client.requests.contains("https://hdqwalls.com/search?q=actress"))
+            // Longest-first stops at the winner: `indian` is never tried.
+            assertTrue(client.requests.none { it == "https://hdqwalls.com/search?q=indian" })
+        }
+
+    @Test
+    fun `search answers an honestly empty page when every tier fails`() =
+        runTest {
+            configureWith(
+                mapOf(
+                    "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
+                    // Google unreachable at the bootstrap: the tier never starts.
+                    "https://cse.google.com/cse.js" to ProviderHttpResponse(403, emptyMap(), ByteArray(0)),
+                    "https://hdqwalls.com/search?q=actress" to ok(emptySearchPage),
+                    "https://hdqwalls.com/search?q=indian" to ok(emptySearchPage),
+                ),
+            )
+
+            val page = provider.search(query = "indian actress", page = 1).getOrThrow()
 
             assertTrue(page.wallpapers.isEmpty())
             assertNull(page.nextPage)

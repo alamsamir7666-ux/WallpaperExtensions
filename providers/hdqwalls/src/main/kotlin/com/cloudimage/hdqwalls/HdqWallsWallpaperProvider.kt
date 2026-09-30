@@ -43,10 +43,20 @@ import java.net.URLEncoder
  *   the latest feed, `sorting=random` serves one batch of the site's own
  *   random page, and everything else lands on the site's popular ranking —
  *   the default feed the browse tab shows first.
- * - [search] is one request per page: the site's search answers with
- *   wallpapers directly, paginated as deep as the site itself goes, and
- *   its tag matching means a category name searched returns that
- *   category's content (verified live: `cars` — 12,303 results).
+ * - [search] rides a three-tier chain, mirroring the site's own search
+ *   page: the site's database first (one request per page, paginated as
+ *   deep as the site itself goes, and its tag matching means a category
+ *   name searched returns that category's content — verified live: `cars`
+ *   — 12,303 results). When the database answers with NO grid cell — the
+ *   exact condition under which the site's page embeds a Google
+ *   Programmable Search Engine instead of results — the provider replays
+ *   the site's fallback: the engine's web results read keylessly
+ *   (bootstrap token from `cse.google.com/cse.js`, then the element API),
+ *   each result's wallpaper page fetched for its true original; and when
+ *   Google is unreachable (it rate-limits flagged networks), a per-word
+ *   site search — the longest word first, `actress` alone still answers
+ *   1,029 wallpapers — so a miss degrades to related results, never to
+ *   an error.
  * - [sections] offers fourteen shelves: Popular, Latest, Anime (a host
  *   `category` preset), Celebrities (the `people` one), and tag-style
  *   `query` presets for Girls, Cars, Superheroes, Games, Movies, Nature,
@@ -66,7 +76,12 @@ import java.net.URLEncoder
  * with a deep-pagination cap; a browser tab on the same pages costs the
  * same or more. The site blocks known-bot User-Agents but serves the
  * app's own identification (verified live against every path this
- * provider touches), so no browser impersonation is needed.
+ * provider touches), so no browser impersonation is needed. The search
+ * fallback's Google tier fires only after the site's own database
+ * answered empty, and costs what the site's own embedded element costs:
+ * one bootstrap fetch, one results call, and one page fetch per resolved
+ * result, capped; the per-word tier rides the same site pages as the
+ * primary search, a few single-word requests at most.
  *
  * ## State
  *
@@ -94,7 +109,7 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "HDQWalls",
-            versionName = "1.0.1",
+            versionName = "1.0.2",
             author = "Cloudimage",
             description = "HD, 4K, 5K and 8K wallpapers from hdqwalls.com - scraped, keyless.",
             // The site curates its uploads and carries no per-item rating
@@ -136,12 +151,28 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
         }
 
     /**
-     * One request per page: the site's search answers with wallpapers
-     * directly — no album indirection — paginated as deep as the site
-     * itself goes. Its tag matching is what the query-preset shelves ride:
-     * a category name searched returns that category's content. A blank
-     * query (the contract's escape hatch) lands on the latest feed's
-     * first page, the same default the blank popular feed would show.
+     * The three-tier chain, the site's own search page replayed:
+     *
+     * 1. The site's database — one request per page, the same direct
+     *    answer it has always given.
+     * 2. A database MISS (zero grid cells — verified live for `indian
+     *    actress`, a query whose pages exist but which the DB search
+     *    cannot address) is the exact condition under which the site's
+     *    page embeds Google Programmable Search instead. The provider
+     *    reads that same engine keylessly: the bootstrap token, one
+     *    element-API call per page, then each result's wallpaper page
+     *    fetched for its disclosed original — the items Google's Web tab
+     *    shows, as real wallpapers.
+     * 3. Google unreachable (it rate-limits flagged networks with a 403
+     *    apology page) or answerless: a per-word site search — the
+     *    query's own stop-word-free words, longest first, up to three —
+     *    so `indian actress` still answers with the `actress` family.
+     *
+     * Every tier returns a Page the next tier can continue: the CSE tier
+     * paginates by result offset, the per-word tier by the site's own
+     * query-string pagination. A blank query (the contract's escape
+     * hatch) lands on the latest feed's first page, the same default the
+     * blank popular feed would show.
      */
     override suspend fun search(
         query: String,
@@ -152,7 +183,15 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
             if (query.isBlank()) {
                 return@runCatching listingPage(LATEST_PATH, 1)
             }
-            listingPage("/search?q=${encode(query)}", page)
+            val own = listingPage("/search?q=${encode(query)}", page)
+            if (own.wallpapers.isNotEmpty()) {
+                return@runCatching own
+            }
+            val cse = cseSearchPage(query, page)
+            if (cse.wallpapers.isNotEmpty()) {
+                return@runCatching cse
+            }
+            wordSearchPage(query, page) ?: Page(emptyList(), nextPage = null)
         }
 
     /**
@@ -281,6 +320,108 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
         return HdqWallsParser.parseGrid(response.bodyText).map(::gridWallpaper).let(::rememberTagsIn)
     }
 
+    // ------------------------------------------------------------ search fallback
+
+    /**
+     * The Google tier for one page: bootstrap token, one element-API call
+     * at the page's result offset, then each result resolved — its
+     * rich-snippet image when the response volunteers a real site CDN URL,
+     * its wallpaper page otherwise — into the same [Wallpaper] shape the
+     * grid serves. Sequential by contract (the host exposes no dispatcher
+     * to plugin code), capped at the page size. Any failure — token,
+     * transport, parse, Google's rate-limit apology — degrades to an
+     * empty page the chain reads as "tier failed"; never an error.
+     */
+    private suspend fun cseSearchPage(
+        query: String,
+        page: Int,
+    ): Page {
+        if (page < 1 || page > CSE_MAX_PAGES) return Page(emptyList(), nextPage = null)
+        val bootstrap =
+            runCatching { get(HdqWallsCseSearch.BOOTSTRAP_URL) }.getOrNull()
+                ?: return Page(emptyList(), nextPage = null)
+        if (!bootstrap.isSuccessful) return Page(emptyList(), nextPage = null)
+        val token = HdqWallsCseSearch.extractToken(bootstrap.bodyText) ?: return Page(emptyList(), nextPage = null)
+        val start = (page - 1) * HdqWallsCseSearch.PAGE_SIZE
+        val response =
+            runCatching {
+                get(HdqWallsCseSearch.resultsUrl(encode(query), start, token))
+            }.getOrNull() ?: return Page(emptyList(), nextPage = null)
+        if (!response.isSuccessful) return Page(emptyList(), nextPage = null)
+        val csePage = HdqWallsCseSearch.parseResults(response.bodyText, start) ?: return Page(emptyList(), nextPage = null)
+        if (csePage.results.isEmpty()) return Page(emptyList(), nextPage = null)
+        val wallpapers =
+            csePage.results
+                .take(CSE_RESOLVE_LIMIT)
+                .mapNotNull { resolveCseResult(it) }
+                .let(::rememberTagsIn)
+        return Page(wallpapers, nextPage = csePage.nextStart?.let { it / HdqWallsCseSearch.PAGE_SIZE + 1 })
+    }
+
+    /**
+     * One engine result to a wallpaper. The slug must be a hdqwalls page;
+     * the image comes from the result's own rich snippet when that is a
+     * real site CDN URL, and from the wallpaper page — the definitive
+     * record [details] reads — otherwise. Unresolvable results drop
+     * silently: a fallback page of three honest wallpapers beats one
+     * padded with placeholders.
+     */
+    private suspend fun resolveCseResult(result: HdqWallsCseSearch.CseResult): Wallpaper? {
+        val slug = HdqWallsCseSearch.pageSlug(result.pageUrl) ?: return null
+        val title = HdqWallsCseSearch.cleanTitle(result.title)
+        result.imageUrl?.let(HdqWallsParser::siteOriginalUrl)?.let { original ->
+            return Wallpaper(
+                id = slug,
+                providerId = ID,
+                thumbUrl = HdqWallsParser.toThumbUrl(original) ?: original,
+                fullUrl = original,
+                title = title.ifBlank { null },
+                tags = tagsFromTitle(title),
+            )
+        }
+        val response =
+            runCatching { get("$BASE_URL/${encode(slug)}") }.getOrNull()
+                ?: return null
+        if (!response.isSuccessful) return null
+        val record = HdqWallsParser.parseDetail(response.bodyText) ?: return null
+        return Wallpaper(
+            id = slug,
+            providerId = ID,
+            thumbUrl = HdqWallsParser.toThumbUrl(record.originalUrl) ?: record.originalUrl,
+            fullUrl = record.originalUrl,
+            title = record.title ?: title.ifBlank { null },
+            tags = record.tags.take(MAX_TAGS).ifEmpty { tagsFromTitle(title) },
+        )
+    }
+
+    /**
+     * The last-resort tier: the query's own words, searched one by one on
+     * the site — longest first (the most specific term wins: `actress`
+     * outranks `indian`), stop words and resolution labels dropped (the
+     * same vocabulary the title tags use), at most [SPLIT_WORD_LIMIT]
+     * words. The first word whose page answers with wallpapers wins, its
+     * own pagination intact. All words miss: null, and the chain returns
+     * an honestly empty page.
+     */
+    private suspend fun wordSearchPage(
+        query: String,
+        page: Int,
+    ): Page? {
+        val words =
+            query
+                .lowercase()
+                .split(Regex("""[^a-z0-9']+"""))
+                .filter { it.length >= MIN_TAG_LENGTH && it !in TITLE_STOP_WORDS }
+                .distinct()
+                .sortedByDescending { it.length }
+                .take(SPLIT_WORD_LIMIT)
+        for (word in words) {
+            val candidate = listingPage("/search?q=${encode(word)}", page)
+            if (candidate.wallpapers.isNotEmpty()) return candidate
+        }
+        return null
+    }
+
     // ------------------------------------------------------------- mapping
 
     /**
@@ -363,6 +504,15 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
 
         /** Deep-pagination cap: a hundred pages, eighteen items each. */
         const val MAX_PAGES = 100
+
+        /** The Google tier's page cap — the element cursor itself stops at ten. */
+        const val CSE_MAX_PAGES = 10
+
+        /** Result pages resolved eagerly per fallback page (the page size). */
+        const val CSE_RESOLVE_LIMIT = 10
+
+        /** The per-word tier's word cap: three tries, longest first. */
+        const val SPLIT_WORD_LIMIT = 3
 
         /** Title-derived tags: word floor, noise list, per-item and pool caps. */
         const val MIN_TAG_LENGTH = 3

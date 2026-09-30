@@ -255,7 +255,7 @@ internal object HdqWallsParser {
     }
 
     /** `https://hdqwalls.com/{slug}-wallpaper` (or site-relative) to the slug itself; anything else is null. */
-    private fun pageSlug(href: String): String? {
+    fun pageSlug(href: String): String? {
         val path =
             when {
                 href.startsWith("https://hdqwalls.com/") -> href.removePrefix("https://hdqwalls.com/")
@@ -283,6 +283,21 @@ internal object HdqWallsParser {
         originalUrl
             .takeIf { it.startsWith(IMAGE_CDN) && !it.contains("/bthumb/") }
             ?.replaceFirst("/wallpapers/", "/wallpapers/bthumb/")
+
+    /**
+     * Any site CDN URL — a `/wallpapers/` original or its `/wallpapers/bthumb/`
+     * preview — to the original it discloses, for callers that receive image
+     * URLs secondhand (the Google CSE tier's rich-snippet thumbnails, which
+     * are often the page's `og:image`). Anything else — Google-proxied
+     * previews, foreign hosts, fragments — answers null: the caller then
+     * fetches the wallpaper page itself instead of trusting the shortcut.
+     */
+    fun siteOriginalUrl(url: String): String? =
+        when {
+            url.startsWith(IMAGE_CDN + "bthumb/") -> toOriginalUrl(url)
+            url.startsWith(IMAGE_CDN) -> url.substringBefore('#')
+            else -> null
+        }
 
     /** Grid titles all end in `Wallpaper`; the display title is what precedes it. */
     fun cleanTitle(title: String): String = WALLPAPER_SUFFIX.replace(title.trim(), "").trim()

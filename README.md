@@ -42,7 +42,7 @@ demands.
 | Package | Version | Size | Capabilities | Notes |
 |---|---|---|---|---|
 | `cloudimage.wallpapercave` | 1.2.0 | 24 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
-| `cloudimage.hdqwalls` | 1.0.1 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
+| `cloudimage.hdqwalls` | 1.0.2 | 18 KB | popular, latest, search, filters, tags, random | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapers4k` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.alphacoders` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapersafari` | 1.0.1 | 26 KB | popular, search, filters, tags | Keyless scraper, SFW, API v1 |
@@ -115,7 +115,7 @@ providers/wallpapercave/     extension source (Kotlin JVM module)
 ├── build.gradle.kts         applies the cloudimage.provider convention
 ├── extension.json           manifest: id, version, entry class
 └── src/…                    parser + provider + 34 unit tests
-providers/hdqwalls/          the second extension, same layout (21 tests)
+providers/hdqwalls/          the second extension, same layout (36 tests)
 providers/wallpapers4k/      the third extension, same layout (27 tests)
 providers/alphacoders/       the fourth extension, same layout (29 tests)
 providers/wallpapersafari/   the fifth extension, same layout (26 tests)
@@ -192,6 +192,24 @@ lines plus 470 lines of tests):
   read "602x339" for everything. Grid items now carry no dimensions at
   all (the app renders "—"), and the true resolution stays where the
   site publishes it: the detail record.
+- **Search that never says no (1.0.2).** The site's own search is a
+  two-layer system, and the provider now replays both layers: the site's
+  database answers first — but when it answers with ZERO grid cells (the
+  live `indian actress` shape: pages matching the query exist, the DB
+  search just cannot address them), the site's page embeds a Google
+  Programmable Search Engine instead of results, and the provider reads
+  that same engine keylessly — the bootstrap token from
+  `cse.google.com/cse.js`, then the element API the site's own element
+  calls — and resolves each result's wallpaper page into the same
+  Wallpaper shape as the grid (rich-snippet image when Google volunteers
+  a real site CDN URL, page fetch otherwise). If Google is unreachable
+  (it rate-limits flagged networks with a 403 apology), a per-word site
+  search — longest word first, stop words dropped — still answers with
+  the related family (`actress` alone: 1,029 walls). A miss degrades to
+  related results or honest emptiness, never an error. The Google tier
+  paginates by result offset off the response's cursor; politeness is
+  unchanged: the fallback fires only after the database answered empty,
+  and costs what the site's own embedded element costs the browser.
 - **True-resolution details.** Each wallpaper page publishes its
   `Original Resolution` (e.g. 3840x2159 — the only place true dims
   exist), an author credit, a download-size label and the site's own tag
@@ -201,13 +219,17 @@ lines plus 470 lines of tests):
   endpoint (never called; suggestions come from seen tags) and
   `/addauthor`. Everything used is allowed, one request per page, capped
   at 100 pages deep.
-- **Verified.** 21 unit tests from real captured markup (grid shapes,
-  both quote styles, attribute orders, pagination stop signals, blank
-  queries, deep-page caps, detail fallbacks) plus a gated
-  `HdqWallsLiveCheckTest` (`HDQWALLS_LIVE=1`): popular through two fresh
-  pages, the anime shelf, direct search pagination, a query-preset
-  shelf, definitive details with true dimensions, and the random batch —
-  all green against the live site.
+- **Verified.** 36 unit tests from real captured markup and API shapes
+  (grid shapes, both quote styles, attribute orders, pagination stop
+  signals, blank queries, deep-page caps, detail fallbacks, plus the
+  fallback chain: the DB-miss page, the CSE bootstrap token, JSONP and
+  bare-JSON element answers, cursor pagination, snippet-vs-page
+  resolution, dead-page drops, the 403 degradation, the page cap and the
+  per-word tier) plus a gated `HdqWallsLiveCheckTest` (`HDQWALLS_LIVE=1`):
+  popular through two fresh pages, the anime shelf, direct search
+  pagination, a query-preset shelf, the db-miss query through the live
+  fallback chain, definitive details with true dimensions, and the random
+  batch — all green against the live site.
 
 ## The 4K Wallpapers extension
 

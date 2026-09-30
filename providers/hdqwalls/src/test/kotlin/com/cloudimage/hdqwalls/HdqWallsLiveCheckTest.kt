@@ -13,8 +13,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Live check against hdqwalls.com, for maintenance: the fixture tests pin
- * the markup shapes, this answers whether the SITE still speaks them.
+ * Live check against hdqwalls.com (and, through the search fallback, its
+ * embedded Google Programmable Search Engine), for maintenance: the
+ * fixture tests pin the markup shapes, this answers whether the SITE —
+ * and the site's own fallback chain — still speaks them.
  *
  * Run on demand with:
  *
@@ -22,7 +24,9 @@ import java.net.URL
  *
  * The assumption skips every test here unless that variable is set — CI and
  * plain `check` never touch the network. Requests are sequential and few,
- * exactly what one user browsing the app produces.
+ * exactly what one user browsing the app produces. Note that the CSE tier
+ * of the fallback can be rate-limited by Google on flagged (datacenter)
+ * networks — the live db-miss test accepts either fallback tier's answer.
  */
 class HdqWallsLiveCheckTest {
     private val provider = HdqWallsWallpaperProvider()
@@ -127,6 +131,44 @@ class HdqWallsLiveCheckTest {
 
             assertTrue("expected a full batch, got ${page.wallpapers.size}", page.wallpapers.size >= 15)
             assertTrue(page.nextPage != null)
+        }
+
+    /**
+     * The 1.0.2 feature, end to end on the live network: a query the site's
+     * own database cannot address (`indian actress` — verified live to
+     * answer ZERO grid cells while pages matching it exist) must still
+     * answer with wallpapers, via the site's own fallback — the Google
+     * Programmable Search tier when the network reaches it, the per-word
+     * site tier when Google rate-limits. Either way: real hdqwalls
+     * wallpapers with disclosed originals, never an empty grid.
+     */
+    @Test
+    fun `a db-miss query still answers with wallpapers through the fallback chain`() =
+        runTest {
+            assumeTrue(live())
+            val configured = configured()
+            val page1 = configured.search(query = "indian actress", page = 1).getOrThrow()
+
+            assertTrue(
+                "expected fallback results for the db-miss query, got ${page1.wallpapers.size}",
+                page1.wallpapers.isNotEmpty(),
+            )
+            val first = page1.wallpapers.first()
+            assertTrue(first.id.endsWith("-wallpaper"))
+            assertTrue(first.thumbUrl!!.startsWith("https://images.hdqwalls.com/wallpapers/"))
+            assertTrue(first.fullUrl.startsWith("https://images.hdqwalls.com/wallpapers/"))
+
+            // The fallback page continues: the cursor (CSE tier) or the
+            // site's pagination (word tier) hands back a page 2.
+            val next = page1.nextPage
+            if (next != null) {
+                val page2 = configured.search(query = "indian actress", page = next).getOrThrow()
+                val ids1 = page1.wallpapers.map { it.id }.toSet()
+                assertTrue(
+                    "expected fresh items on fallback page 2",
+                    page2.wallpapers.none { it.id in ids1 },
+                )
+            }
         }
 
     @Test
