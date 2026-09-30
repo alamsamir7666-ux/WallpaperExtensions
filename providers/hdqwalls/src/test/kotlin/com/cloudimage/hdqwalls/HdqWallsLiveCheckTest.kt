@@ -171,6 +171,42 @@ class HdqWallsLiveCheckTest {
             }
         }
 
+    /**
+     * The 1.0.4 feature, end to end on the live network: a BROAD db-miss
+     * query — `hollywood actress`, whose site answer embeds the Google
+     * engine with nine listing URLs out of ten results — must answer with
+     * a DEEP stream, not a handful: the engine's ranking points at the
+     * site's own actress listing, and the search rides that listing's
+     * grid, 18 a page with the site's own cursor, stable across pages.
+     */
+    @Test
+    fun `a broad db-miss query rides its winning listing deep`() =
+        runTest {
+            assumeTrue(live())
+            val configured = configured()
+            val page1 = configured.search(query = "hollywood actress", page = 1).getOrThrow()
+
+            // A full batch that continues — the listing's own grid, not ten
+            // engine cards and not a two-result dead end.
+            assertTrue("expected a full batch, got ${page1.wallpapers.size}", page1.wallpapers.size >= 15)
+            assertTrue("expected a next page", page1.nextPage != null)
+            val first = page1.wallpapers.first()
+            assertTrue(first.id.endsWith("-wallpaper"))
+            assertTrue(first.thumbUrl.contains("/bthumb/"))
+
+            val page2 = configured.search(query = "hollywood actress", page = 2).getOrThrow()
+            assertTrue("expected a full batch on page 2, got ${page2.wallpapers.size}", page2.wallpapers.size >= 15)
+            val ids1 = page1.wallpapers.map { it.id }.toSet()
+            assertTrue("expected fresh items on page 2", page2.wallpapers.none { it.id in ids1 })
+
+            // Past the engine's own ten-page cursor, the stream continues:
+            // the anchor listing is the site's pagination now.
+            val page11 = configured.search(query = "hollywood actress", page = 11).getOrThrow()
+            assertTrue("expected the stream to continue past page 10, got ${page11.wallpapers.size}", page11.wallpapers.isNotEmpty())
+            val seen = ids1 + page2.wallpapers.map { it.id }
+            assertTrue("expected fresh items on page 11", page11.wallpapers.none { it.id in seen })
+        }
+
     @Test
     fun `details reads the definitive live record`() =
         runTest {

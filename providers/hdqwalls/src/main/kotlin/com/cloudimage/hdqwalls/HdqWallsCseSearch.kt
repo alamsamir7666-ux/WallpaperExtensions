@@ -22,6 +22,18 @@ import kotlin.random.Random
  * that same Google tier, so a DB-miss query still answers with wallpapers
  * instead of an empty grid.
  *
+ * The engine's answers arrive in two kinds, and both are load-bearing:
+ * wallpaper pages (the singular `-wallpaper` slugs, resolved per result)
+ * and the site's own LISTING pages — the tag, category and resolution
+ * grids Google freely interleaves with them. A listing is not a wallpaper,
+ * but it is something better: Google's own answer to "which of the site's
+ * grids best matches this query" (verified live: `hollywood actress`
+ * returns NINE listing URLs out of ten results, seven of them the
+ * `actress-wallpapers` tag at different resolutions and sort orders —
+ * a 1,029-wallpaper listing the site itself would take 58 pages to walk).
+ * [listingLeads] reads those URLs into ranked leads, and the provider
+ * serves the query from the winning listing's own deep pagination.
+ *
  * ## How it works, keylessly
  *
  * The CSE element API needs no API key — only the engine ID (visible in
@@ -155,6 +167,16 @@ internal object HdqWallsCseSearch {
     /** The trailing branding a result title carries (verified live). */
     private val SITE_BRANDING = Regex("""\s*[-|]\s*hdqwalls\s*$""", RegexOption.IGNORE_CASE)
 
+    /**
+     * A listing segment inside a result path: `{tag}-wallpapers`, with the
+     * site's `category/` prefix as its one qualifier. Resolution prefixes
+     * (`/540x960/actress-wallpapers`), page cursors (`…/page/51`) and sort
+     * orders (`…/sort/views`) ride AROUND the segment — the segment itself
+     * is the listing's name, and the wallpaper pages' singular
+     * `-wallpaper` suffix never matches it.
+     */
+    private val LISTING_SEGMENT = Regex("""(?:^|/)(category/)?([a-z0-9][a-z0-9-]*-wallpapers)(?=/|$)""")
+
     /** JSON facade; unknown keys ignored, navigation wrapped by callers. */
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -271,6 +293,49 @@ internal object HdqWallsCseSearch {
             }.getOrNull()
         return CsePage(results, nextStart)
     }
+
+    /**
+     * The site listing URLs among the engine's results, as ranked leads —
+     * Google's own answer to "which of the site's grids matches this
+     * query". Every result URL is read for a `{tag}-wallpapers` segment
+     * (in any of the forms the site addresses it: plain, resolution-
+     * prefixed, paginated, sorted, category-qualified); each occurrence is
+     * a vote, and the leads come out ordered by votes, Google's own result
+     * order breaking ties — so `hollywood actress`, whose ten results
+     * carry `actress-wallpapers` seven times and the celebrities category
+     * twice, answers [`/actress-wallpapers`, `/category/celebrities-wallpapers`].
+     * Results with no listing segment — wallpaper pages, foreign pages,
+     * the site's search page — contribute nothing, and a result set of
+     * only those answers the empty list.
+     */
+    fun listingLeads(results: List<CseResult>): List<String> {
+        val votes = LinkedHashMap<String, Int>()
+        for (result in results) {
+            resultPath(result.pageUrl)?.let { path ->
+                LISTING_SEGMENT.findAll(path).forEach { match ->
+                    val prefix = if (match.groupValues[1].isNotEmpty()) "/category/" else "/"
+                    val lead = prefix + match.groupValues[2]
+                    votes[lead] = (votes[lead] ?: 0) + 1
+                }
+            }
+        }
+        return votes.entries.sortedByDescending { it.value }.map { it.key }
+    }
+
+    /**
+     * A result URL to its site path, query string and fragment off — the
+     * shape [LISTING_SEGMENT] reads. Null for anything not on the site's
+     * own host (foreign results Google sometimes interleaves).
+     */
+    private fun resultPath(url: String): String? =
+        when {
+            url.startsWith("https://hdqwalls.com/") -> url.removePrefix("https://hdqwalls.com/")
+            url.startsWith("http://hdqwalls.com/") -> url.removePrefix("http://hdqwalls.com/")
+            url.startsWith("/") -> url.removePrefix("/")
+            else -> null
+        }?.substringBefore('?')
+            ?.substringBefore('#')
+            ?.trimEnd('/')
 
     /**
      * A result URL to its wallpaper page slug, via the site parser's own

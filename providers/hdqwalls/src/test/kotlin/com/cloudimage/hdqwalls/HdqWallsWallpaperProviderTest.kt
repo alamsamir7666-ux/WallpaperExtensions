@@ -228,6 +228,105 @@ class HdqWallsWallpaperProviderTest {
         """.trimIndent()
 
     /**
+     * The engine's answer for a BROAD query, as captured live for
+     * `hollywood actress`: the site's own listings dominate — the actress
+     * tag in three of the address forms the site gives it — with one
+     * wallpaper page interleaved. Google's ranking of which of the site's
+     * grids matches the query, on the wire.
+     */
+    private val cseLeadResults =
+        """
+        /*O_o*/
+        google.search.cse.api682738492({
+         "results": [
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/540x960/actress-wallpapers",
+           "titleNoFormatting": "Actress 540x960 Resolution Wallpapers - hdqwalls"},
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/zendaya-demi-moore-mikey-madison-the-hollywood-reporter-2025-wallpaper",
+           "titleNoFormatting": "Zendaya Demi Moore Mikey Madison - hdqwalls",
+           "richSnippet": {"cseThumbnail": {"src": "https://images.hdqwalls.com/wallpapers/bthumb/zendaya-reporter-aa.jpg"}}},
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/category/celebrities-wallpapers/7680x4320",
+           "titleNoFormatting": "Celebrities Wallpapers (8K) - hdqwalls"},
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/1280x1024/actress-wallpapers/page/51",
+           "titleNoFormatting": "Page 51: Actress 1280x1024 Wallpapers - hdqwalls"},
+          {"GsearchResultClass": "GwebSearch",
+           "url": "https://hdqwalls.com/actress-wallpapers/sort/views",
+           "titleNoFormatting": "Actress Wallpapers,Images,Backgrounds - hdqwalls"}
+         ],
+         "cursor": {"pages": [{"start": "0", "label": "1"}, {"start": "10", "label": "2"}],
+          "estimatedResultCount": "943"}
+        });
+        """.trimIndent()
+
+    /** The actress tag listing's grid — the winning lead's own content. */
+    private val listingGrid =
+        """
+        <div class='wall-resp col-lg-4 col-md-4 col-sm-4 col-xs-6 column_padding'>
+              <a href='https://hdqwalls.com/margot-robbie-actress-hd-wallpaper' title='Margot Robbie Actress Hd Wallpaper'>
+                  <img width='602' height='339' src='https://images.hdqwalls.com/wallpapers/bthumb/margot-robbie-actress-hd-bb.jpg' title='Margot Robbie Actress Hd Wallpaper' alt='Margot Robbie Actress Hd Wallpaper' class='thumbnail img-responsive custom_width'>
+              </a>
+              </div><div class='wall-resp col-lg-4 col-md-4 col-sm-4 col-xs-6 column_padding'>
+              <a href='https://hdqwalls.com/scarlett-johansson-actress-wallpaper' title='Scarlett Johansson Actress Wallpaper'>
+                  <img width='602' height='339' src='https://images.hdqwalls.com/wallpapers/bthumb/scarlett-johansson-actress-cc.jpg' title='Scarlett Johansson Actress Wallpaper' alt='Scarlett Johansson Actress Wallpaper' class='thumbnail img-responsive custom_width'>
+              </a>
+              </div>
+        """.trimIndent()
+
+    /** The tag listing's pagination — path form, Next to page 2. */
+    private val listingPagination =
+        """
+        <ul class="pagination"><li class="active"><a href="https://hdqwalls.com/actress-wallpapers/page/1">1</a></li><li><a href="https://hdqwalls.com/actress-wallpapers/page/2">2</a></li><li><a href="https://hdqwalls.com/actress-wallpapers/page/58">58</a></li><li><a href="https://hdqwalls.com/actress-wallpapers/page/2">Next &raquo;</a></li></ul>
+        """.trimIndent()
+
+    /** The same bar one page deeper — Next to page 3. */
+    private val listingPaginationPageTwo =
+        """
+        <ul class="pagination"><li><a href="https://hdqwalls.com/actress-wallpapers/page/1">1</a></li><li class="active"><a href="https://hdqwalls.com/actress-wallpapers/page/2">2</a></li><li><a href="https://hdqwalls.com/actress-wallpapers/page/3">3</a></li><li><a href="https://hdqwalls.com/actress-wallpapers/page/3">Next &raquo;</a></li></ul>
+        """.trimIndent()
+
+    /** The listing's second page — fresh cells, the stream continuing. */
+    private val listingGridPageTwo =
+        """
+        <div class='wall-resp col-lg-4 col-md-4 col-sm-4 col-xs-6 column_padding'>
+              <a href='https://hdqwalls.com/ana-de-armas-2020-actress-wallpaper' title='Ana De Armas 2020 Actress Wallpaper'>
+                  <img width='602' height='339' src='https://images.hdqwalls.com/wallpapers/bthumb/ana-de-armas-2020-actress-dd.jpg' title='Ana De Armas 2020 Actress Wallpaper' alt='Ana De Armas 2020 Actress Wallpaper' class='thumbnail img-responsive custom_width'>
+              </a>
+              </div>
+        """.trimIndent()
+
+    /**
+     * A dead-end word answer: cells but no continuation — the live shape
+     * of `hollywood`, two results and no Next bar.
+     */
+    private val deadEndGrid =
+        """
+        <div class='wall-resp col-lg-4 col-md-4 col-sm-4 col-xs-6 column_padding'>
+              <a href='https://hdqwalls.com/hollywood-sign-4k-wallpaper' title='Hollywood Sign 4k Wallpaper'>
+                  <img width='602' height='339' src='https://images.hdqwalls.com/wallpapers/bthumb/hollywood-sign-4k-ee.jpg' title='Hollywood Sign 4k Wallpaper' alt='Hollywood Sign 4k Wallpaper' class='thumbnail img-responsive custom_width'>
+              </a>
+              </div><div class='wall-resp col-lg-4 col-md-4 col-sm-4 col-xs-6 column_padding'>
+              <a href='https://hdqwalls.com/hollywood-blvd-night-wallpaper' title='Hollywood Blvd Night Wallpaper'>
+                  <img width='602' height='339' src='https://images.hdqwalls.com/wallpapers/bthumb/hollywood-blvd-night-ff.jpg' title='Hollywood Blvd Night Wallpaper' alt='Hollywood Blvd Night Wallpaper' class='thumbnail img-responsive custom_width'>
+              </a>
+              </div>
+        """.trimIndent()
+
+    /** A full listing batch — the site serves eighteen to a page. */
+    private fun fullBatch(family: String): String =
+        (1..18).joinToString("") { i ->
+            """
+            <div class='wall-resp col-lg-4 col-md-4 col-sm-4 col-xs-6 column_padding'>
+                  <a href='https://hdqwalls.com/$family-$i-wallpaper' title='$family $i Wallpaper'>
+                      <img width='602' height='339' src='https://images.hdqwalls.com/wallpapers/bthumb/$family-$i-gg.jpg' title='$family $i Wallpaper' alt='$family $i Wallpaper' class='thumbnail img-responsive custom_width'>
+                  </a>
+                  </div>
+            """.trimIndent()
+        }
+
+    /**
      * One result whose rich snippet volunteers a `thumb/` preview — the
      * listing pages' `og:image` shape — instead of a real original.
      */
@@ -633,7 +732,7 @@ class HdqWallsWallpaperProviderTest {
         }
 
     @Test
-    fun `cse results that address listing pages drop without a fetch`() =
+    fun `listing results are followed as leads and dead leads degrade`() =
         runTest {
             val client =
                 configureWith(
@@ -641,7 +740,7 @@ class HdqWallsWallpaperProviderTest {
                         "https://hdqwalls.com/search?q=indian+actress" to ok(emptySearchPage),
                         "https://cse.google.com/cse.js" to ok(cseBootstrap),
                         "https://cse.google.com/cse/element/v1" to ok(cseListingResults),
-                        // The word tier tries both words; both answer empty.
+                        // The word tier's words, both answering empty.
                         "https://hdqwalls.com/search?q=actress" to ok(emptySearchPage),
                         "https://hdqwalls.com/search?q=indian" to ok(emptySearchPage),
                     ),
@@ -649,13 +748,165 @@ class HdqWallsWallpaperProviderTest {
 
             val page = provider.search(query = "indian actress", page = 1).getOrThrow()
 
-            // Tag, category and search pages are not wallpapers: the slug
-            // guard drops them before any page fetch fires — not even
-            // their rich-snippet thumb previews are trusted.
+            // A listing result is not a wallpaper, and never masquerades
+            // as one — but it is no longer dropped either: it is FOLLOWED,
+            // as the lead it is. Both leads here are dead (the fake has no
+            // route for them), so the walk degrades through the direct
+            // and word tiers to the honest empty page — no error, and no
+            // listing content leaking in as wallpapers.
             assertTrue(page.wallpapers.isEmpty())
             assertNull(page.nextPage)
-            assertTrue(client.requests.none { it.contains("girls-wallpapers") })
-            assertTrue(client.requests.none { it.contains("celebrities-wallpapers") })
+            assertTrue(client.requests.any { it == "https://hdqwalls.com/girls-wallpapers" })
+            assertTrue(client.requests.any { it == "https://hdqwalls.com/celebrities-wallpapers" })
+        }
+
+    @Test
+    fun `a db-miss query rides the winning listing's own deep grid`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://hdqwalls.com/search?q=hollywood+actress" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                        "https://cse.google.com/cse/element/v1" to ok(cseLeadResults),
+                        "https://hdqwalls.com/actress-wallpapers" to ok(listingGrid + listingPagination),
+                    ),
+                )
+
+            val page = provider.search(query = "hollywood actress", page = 1).getOrThrow()
+
+            // The engine's answer for this query is dominated by the
+            // actress listing — three of five results, Google's own ranking
+            // of which of the site's grids matches — so the query rides that
+            // listing's own grid and pagination: the site's 18-a-page depth,
+            // not ten engine cards and not a two-result dead end.
+            assertEquals(2, page.wallpapers.size)
+            assertEquals("margot-robbie-actress-hd-wallpaper", page.wallpapers.first().id)
+            assertEquals("https://images.hdqwalls.com/wallpapers/bthumb/margot-robbie-actress-hd-bb.jpg", page.wallpapers.first().thumbUrl)
+            // The LISTING's own Next bar — the stream continues by the
+            // site's cursor, deeper than the engine's.
+            assertEquals(2, page.nextPage)
+            assertTrue(client.requests.contains("https://hdqwalls.com/actress-wallpapers"))
+            // The interleaved wallpaper result is never resolved — the
+            // listing serves, and the one engine page fed both tiers
+            // without a second Google call.
+            assertTrue(client.requests.none { it.contains("zendaya") })
+            assertEquals(1, client.requests.count { it.startsWith("https://cse.google.com/cse.js") })
+            assertEquals(1, client.requests.count { it.startsWith("https://cse.google.com/cse/element/v1") })
+        }
+
+    @Test
+    fun `the lead stream stays stable across the query's pages`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://hdqwalls.com/search?q=hollywood+actress" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                        "https://cse.google.com/cse/element/v1" to ok(cseLeadResults),
+                        // Page routes longest-first: the listing's page two
+                        // must not be shadowed by its page-one prefix.
+                        "https://hdqwalls.com/actress-wallpapers/page/2" to ok(listingGridPageTwo + listingPaginationPageTwo),
+                        "https://hdqwalls.com/actress-wallpapers" to ok(listingGrid + listingPagination),
+                    ),
+                )
+
+            val page1 = provider.search(query = "hollywood actress", page = 1).getOrThrow()
+            val page2 = provider.search(query = "hollywood actress", page = 2).getOrThrow()
+
+            // Page two walks the SAME listing's page two — the anchor
+            // holds, so the stream the user scrolls is one coherent grid.
+            assertTrue(client.requests.contains("https://hdqwalls.com/actress-wallpapers/page/2"))
+            assertEquals(listOf("ana-de-armas-2020-actress-wallpaper"), page2.wallpapers.map { it.id })
+            assertEquals(3, page2.nextPage)
+            val ids1 = page1.wallpapers.map { it.id }.toSet()
+            assertTrue(page2.wallpapers.none { it.id in ids1 })
+            // ...and it does so WITHOUT re-mining: one bootstrap and one
+            // element call served the whole two-page scroll.
+            assertEquals(1, client.requests.count { it.startsWith("https://cse.google.com/cse.js") })
+            assertEquals(1, client.requests.count { it.startsWith("https://cse.google.com/cse/element/v1") })
+        }
+
+    @Test
+    fun `a dead lead hands the query to the next ranked lead`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        "https://hdqwalls.com/search?q=hollywood+actress" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ok(cseBootstrap),
+                        "https://cse.google.com/cse/element/v1" to ok(cseLeadResults),
+                        // The anchor lead is gone: HTTP failure, not emptiness.
+                        "https://hdqwalls.com/actress-wallpapers" to ProviderHttpResponse(500, emptyMap(), ByteArray(0)),
+                        "https://hdqwalls.com/category/celebrities-wallpapers" to ok(categoryGrid),
+                    ),
+                )
+
+            val page = provider.search(query = "hollywood actress", page = 1).getOrThrow()
+
+            // A lead that fails — transport, HTTP, an empty grid — hands
+            // the query to the next-ranked lead, never to an error.
+            assertEquals(1, page.wallpapers.size)
+            assertEquals("mclaren-f1-618-horsepower-wallpaper", page.wallpapers.first().id)
+            assertTrue(client.requests.any { it == "https://hdqwalls.com/actress-wallpapers" })
+            assertTrue(client.requests.any { it == "https://hdqwalls.com/category/celebrities-wallpapers" })
+        }
+
+    @Test
+    fun `the word tier prefers the stream that continues over the bigger dead end`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        // Longest prefixes first: the phrase URL must not be
+                        // shadowed by the hollywood word route below it.
+                        "https://hdqwalls.com/search?q=hollywood+actress" to ok(emptySearchPage),
+                        // Google unreachable at the bootstrap.
+                        "https://cse.google.com/cse.js" to ProviderHttpResponse(403, emptyMap(), ByteArray(0)),
+                        // The longer word answers BIGGER but dead: two cells,
+                        // no Next — the live `hollywood` shape.
+                        "https://hdqwalls.com/search?q=hollywood" to ok(deadEndGrid),
+                        // The shorter word answers SMALLER but continuing:
+                        // one cell with a Next bar — the live `actress` shape.
+                        "https://hdqwalls.com/search?q=actress" to ok(searchGrid + searchPagination),
+                    ),
+                )
+
+            val page = provider.search(query = "hollywood actress", page = 1).getOrThrow()
+
+            // The deeper stream wins: `actress` continues (1,029 wallpapers
+            // live), `hollywood` dead-ends at two — and neither is a full
+            // batch here, so both are asked before the richer one wins.
+            assertEquals(1, page.wallpapers.size)
+            assertEquals("batgirl-x-batman-wallpaper", page.wallpapers.first().id)
+            assertEquals(2, page.nextPage)
+            assertTrue(client.requests.contains("https://hdqwalls.com/search?q=hollywood"))
+            assertTrue(client.requests.contains("https://hdqwalls.com/search?q=actress"))
+        }
+
+    @Test
+    fun `a full batch that continues wins the word tier on the spot`() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        // Longest prefixes first again: the phrase route
+                        // must shadow the single-word actress route.
+                        "https://hdqwalls.com/search?q=actress+model" to ok(emptySearchPage),
+                        "https://cse.google.com/cse.js" to ProviderHttpResponse(403, emptyMap(), ByteArray(0)),
+                        "https://hdqwalls.com/search?q=actress" to ok(fullBatch("actress") + searchPagination),
+                        "https://hdqwalls.com/search?q=model" to ok(searchGrid + searchPagination),
+                    ),
+                )
+
+            val page = provider.search(query = "actress model", page = 1).getOrThrow()
+
+            // A full listing batch (18 live, the site's own page size) that
+            // continues is the clear winner — no further word is asked.
+            assertEquals(18, page.wallpapers.size)
+            assertEquals(2, page.nextPage)
+            assertTrue(client.requests.contains("https://hdqwalls.com/search?q=actress"))
+            assertTrue(client.requests.none { it == "https://hdqwalls.com/search?q=model" })
         }
 
     @Test
@@ -745,14 +996,15 @@ class HdqWallsWallpaperProviderTest {
 
             val page = provider.search(query = "indian actress", page = 1).getOrThrow()
 
-            // The longest word wins: `actress` (7) outranks `indian` (6) —
-            // the route the live site answers with 1,029 wallpapers.
+            // The RICHEST word wins, not the first to answer: every word is
+            // asked (no full batch arrived to stop the asking), and
+            // `actress` — the word whose page CONTINUES — outranks the
+            // empty `indian`.
             assertEquals(1, page.wallpapers.size)
             assertEquals("batgirl-x-batman-wallpaper", page.wallpapers.first().id)
             assertEquals(2, page.nextPage)
             assertTrue(client.requests.contains("https://hdqwalls.com/search?q=actress"))
-            // Longest-first stops at the winner: `indian` is never tried.
-            assertTrue(client.requests.none { it == "https://hdqwalls.com/search?q=indian" })
+            assertTrue(client.requests.contains("https://hdqwalls.com/search?q=indian"))
         }
 
     @Test

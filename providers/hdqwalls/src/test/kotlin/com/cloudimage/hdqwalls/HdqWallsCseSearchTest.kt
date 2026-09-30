@@ -171,6 +171,79 @@ class HdqWallsCseSearchTest {
         assertNull(HdqWallsCseSearch.pageSlug("https://hdqwalls.com/category/anime-wallpapers"))
     }
 
+    // ---------------------------------------------------------------- leads
+
+    /** The live `hollywood actress` answer's URL shapes: listings in every form the site addresses them. */
+    private fun resultsOf(vararg urls: String): List<HdqWallsCseSearch.CseResult> =
+        urls.map { HdqWallsCseSearch.CseResult(pageUrl = it, title = "", imageUrl = null) }
+
+    @Test
+    fun `listingLeads reads the site's listing urls in every form the site addresses them`() {
+        val leads =
+            HdqWallsCseSearch.listingLeads(
+                resultsOf(
+                    // The actress tag: plain, resolution-prefixed, paginated, sorted.
+                    "https://hdqwalls.com/actress-wallpapers",
+                    "https://hdqwalls.com/540x960/actress-wallpapers",
+                    "https://hdqwalls.com/1280x1024/actress-wallpapers/page/51",
+                    "https://hdqwalls.com/actress-wallpapers/sort/views",
+                    // The celebrities category, resolution-qualified.
+                    "https://hdqwalls.com/category/celebrities-wallpapers/7680x4320",
+                ),
+            )
+
+        assertEquals(listOf("/actress-wallpapers", "/category/celebrities-wallpapers"), leads)
+    }
+
+    @Test
+    fun `listingLeads ranks by votes with google's own order breaking ties`() {
+        val leads =
+            HdqWallsCseSearch.listingLeads(
+                resultsOf(
+                    // One vote each, first-seen first.
+                    "https://hdqwalls.com/girls-wallpapers",
+                    "https://hdqwalls.com/cars-wallpapers",
+                    // A second vote for cars lifts it over girls.
+                    "https://hdqwalls.com/1920x1080/cars-wallpapers",
+                ),
+            )
+
+        assertEquals(listOf("/cars-wallpapers", "/girls-wallpapers"), leads)
+    }
+
+    @Test
+    fun `listingLeads ignores wallpaper pages, search pages and foreign urls`() {
+        // The singular suffix is a wallpaper page, not a listing; the search
+        // page carries no -wallpapers segment; foreign hosts contribute
+        // nothing — and a result set of only those answers no leads.
+        val leads =
+            HdqWallsCseSearch.listingLeads(
+                resultsOf(
+                    "https://hdqwalls.com/scarlett-johansson-actress-wallpaper",
+                    "https://hdqwalls.com/search?q=hollywood+actress",
+                    "https://www.google.com/search?q=cross+link",
+                    "https://hdqwalls.com/wallpaper/1366x768/vanessa-kirby-hollywood-star-portrait",
+                ),
+            )
+
+        assertTrue(leads.isEmpty())
+    }
+
+    @Test
+    fun `listingLeads keeps a category lead distinct from a same-named tag`() {
+        val leads =
+            HdqWallsCseSearch.listingLeads(
+                resultsOf(
+                    "https://hdqwalls.com/category/celebrities-wallpapers",
+                    "https://hdqwalls.com/celebrities-wallpapers",
+                ),
+            )
+
+        // The category listing and the tag listing are different pages on
+        // the site — both survive as distinct leads, ranked by their votes.
+        assertEquals(listOf("/category/celebrities-wallpapers", "/celebrities-wallpapers"), leads)
+    }
+
     @Test
     fun `cleanTitle strips the site branding then the wallpaper suffix`() {
         assertEquals("Indian Actress Smile", HdqWallsCseSearch.cleanTitle("Indian Actress Smile Wallpaper - hdqwalls"))

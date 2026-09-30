@@ -1,8 +1,8 @@
 {
   "id": "cloudimage.hdqwalls",
   "name": "HDQWalls",
-  "versionName": "1.0.3",
-  "versionCode": 4,
+  "versionName": "1.0.4",
+  "versionCode": 5,
   "author": "Cloudimage",
   "description": "HD, 4K, 5K and 8K wallpapers from hdqwalls.com - scraped, keyless.",
   "apiVersion": 1,

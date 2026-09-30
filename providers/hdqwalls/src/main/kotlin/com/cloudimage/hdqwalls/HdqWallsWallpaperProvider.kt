@@ -43,23 +43,32 @@ import java.net.URLEncoder
  *   the latest feed, `sorting=random` serves one batch of the site's own
  *   random page, and everything else lands on the site's popular ranking —
  *   the default feed the browse tab shows first.
- * - [search] rides a three-tier chain, mirroring the site's own search
+ * - [search] rides a four-tier chain, mirroring the site's own search
  *   page: the site's database first (one request per page, paginated as
  *   deep as the site itself goes, and its tag matching means a category
  *   name searched returns that category's content — verified live: `cars`
  *   — 12,303 results). When the database answers with NO grid cell — the
  *   exact condition under which the site's page embeds a Google
  *   Programmable Search Engine instead of results — the provider replays
- *   the site's fallback: the engine's web results read keylessly
- *   (bootstrap config from `cse.google.com/cse.js`, then the element API
- *   requested exactly as the site's own element requests it), each result
- *   accepted only as a hdqwalls wallpaper page — the singular
- *   `-wallpaper` slug — and resolved by its definitive record, so the
- *   tag, category and search listings Google freely interleaves never
- *   masquerade as wallpapers; and when Google is unreachable (it
- *   rate-limits flagged networks), a per-word site search — the longest
- *   word first, `actress` alone still answers 1,029 wallpapers — so a
- *   miss degrades to related results, never to an error.
+ *   the site's fallback, reading that engine keylessly (bootstrap config
+ *   from `cse.google.com/cse.js`, then the element API requested exactly
+ *   as the site's own element requests it) — and the engine's answer
+ *   splits by kind, because BOTH kinds are load-bearing. Its wallpaper
+ *   pages (the singular `-wallpaper` slugs) resolve per result, each
+ *   accepted only by its definitive record — the Original Resolution
+ *   line — so the tag, category and search listings Google freely
+ *   interleaves never masquerade as wallpapers. Its LISTING pages are
+ *   followed instead of dropped: mined as ranked leads (Google's own
+ *   answer to "which of the site's grids matches this query" — verified
+ *   live: `hollywood actress` returns the `actress-wallpapers` tag seven
+ *   times out of ten results), the winning listing's own deep pagination
+ *   serves the query — 18 wallpapers a page, as deep as the site itself
+ *   goes, deeper than Google's own ten-page cursor. When Google is
+ *   unreachable (it rate-limits flagged networks), a per-word site search
+ *   answers — the RICHEST word, not the longest: a word whose page
+ *   continues (`actress`, 1,029 wallpapers) outranks a bigger dead end
+ *   (`hollywood`, 2 wallpapers, no next page) — so a miss degrades to a
+ *   deep stream of related results, never to a dead end.
  * - [sections] offers fourteen shelves: Popular, Latest, Anime (a host
  *   `category` preset), Celebrities (the `people` one), and tag-style
  *   `query` presets for Girls, Cars, Superheroes, Games, Movies, Nature,
@@ -82,16 +91,24 @@ import java.net.URLEncoder
  * provider touches), so no browser impersonation is needed. The search
  * fallback's Google tier fires only after the site's own database
  * answered empty, and costs what the site's own embedded element costs:
- * one bootstrap fetch, one results call, and one page fetch per resolved
- * result, capped; the per-word tier rides the same site pages as the
- * primary search, a few single-word requests at most.
+ * one bootstrap fetch and one results call per fallback page — the
+ * listing-lead tier then walks the site's own grid pages (two requests
+ * per page once the leads are mined, cheaper than the ten eager page
+ * fetches the direct-results tier would make), and the per-word tier
+ * rides the same site pages as the primary search, a few single-word
+ * requests at most.
  *
  * ## State
  *
- * The contract asks plugins to be stateless; the only mutable state is
- * the tag pool feeding [suggestTags] — a bonus, never a dependency. A
- * fresh instance answers identically, at worst without suggestions. The
- * pool is guarded by one lock; sections load in parallel on the host side.
+ * The contract asks plugins to be stateless; the mutable state is two
+ * bonuses, never dependencies. The tag pool feeding [suggestTags] and
+ * the search fallback's query-keyed caches — the mined listing leads
+ * and the anchor that served a query's earlier pages, keeping a
+ * fallback stream stable while it scrolls — are both bounded, guarded
+ * by one lock, and recomputed from the sources whenever a fresh
+ * instance (or an evicted entry) needs them: a fresh instance answers
+ * identically, at worst re-deriving what the cache would have remembered.
+ * Sections load in parallel on the host side.
  *
  * ## Dimensions
  *
@@ -112,7 +129,7 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "HDQWalls",
-            versionName = "1.0.3",
+            versionName = "1.0.4",
             author = "Cloudimage",
             description = "HD, 4K, 5K and 8K wallpapers from hdqwalls.com - scraped, keyless.",
             // The site curates its uploads and carries no per-item rating
@@ -154,7 +171,7 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
         }
 
     /**
-     * The three-tier chain, the site's own search page replayed:
+     * The four-tier chain, the site's own search page replayed:
      *
      * 1. The site's database — one request per page, the same direct
      *    answer it has always given.
@@ -163,22 +180,35 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
      *    cannot address) is the exact condition under which the site's
      *    page embeds Google Programmable Search instead. The provider
      *    reads that same engine keylessly: the bootstrap config, one
-     *    element-API call per page in the element's own wire shape
-     *    (`cse_tok`, JSONP callback and all), then each result accepted
+     *    element-API call in the element's own wire shape (`cse_tok`,
+     *    JSONP callback and all) — and the results split by kind:
+     *    LISTING leads first. The engine's answers for a broad query are
+     *    dominated by the site's own grids (verified live: `hollywood
+     *    actress` returns nine listing URLs out of ten, seven of them the
+     *    `actress-wallpapers` tag), and the winning listing serves the
+     *    query from its own deep pagination — 18 wallpapers a page, the
+     *    site's own Next-bar cursor, past Google's ten-page element
+     *    limit. The leads are mined once per query and cached, so page
+     *    two of the search walks page two of the SAME listing — a stable
+     *    stream, not a re-ranked one.
+     * 3. Wallpaper-page results — the engine's direct hits, each accepted
      *    only as a hdqwalls wallpaper page resolved by its definitive
      *    record — the Original Resolution line — so Google's web results,
      *    which freely interleave tag and category listings with wallpaper
      *    pages, answer with real wallpapers only.
-     * 3. Google unreachable (it rate-limits flagged networks with a 403
+     * 4. Google unreachable (it rate-limits flagged networks with a 403
      *    apology page) or answerless: a per-word site search — the
-     *    query's own stop-word-free words, longest first, up to three —
-     *    so `indian actress` still answers with the `actress` family.
+     *    query's own stop-word-free words, up to three, the RICHEST
+     *    answer winning: a page that continues (`actress`, 1,029
+     *    wallpapers, 58 pages) outranks a bigger dead end (`hollywood`,
+     *    2 wallpapers, no next page).
      *
-     * Every tier returns a Page the next tier can continue: the CSE tier
-     * paginates by result offset, the per-word tier by the site's own
-     * query-string pagination. A blank query (the contract's escape
-     * hatch) lands on the latest feed's first page, the same default the
-     * blank popular feed would show.
+     * Every tier returns a Page the next tier can continue: the listing
+     * tier paginates by the site's own cursor, the CSE tier by result
+     * offset, the per-word tier by the site's query-string pagination. A
+     * blank query (the contract's escape hatch) lands on the latest
+     * feed's first page, the same default the blank popular feed would
+     * show.
      */
     override suspend fun search(
         query: String,
@@ -193,11 +223,7 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
             if (own.wallpapers.isNotEmpty()) {
                 return@runCatching own
             }
-            val cse = cseSearchPage(query, page)
-            if (cse.wallpapers.isNotEmpty()) {
-                return@runCatching cse
-            }
-            wordSearchPage(query, page) ?: Page(emptyList(), nextPage = null)
+            searchFallback(query, page)
         }
 
     /**
@@ -329,33 +355,127 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
     // ------------------------------------------------------------ search fallback
 
     /**
-     * The Google tier for one page: bootstrap config, one element-API call
-     * at the page's result offset — in the element's own wire shape — then
-     * each result resolved: its rich-snippet image when the response
-     * volunteers a real site CDN original, its wallpaper page otherwise,
-     * and only its definitive record at that. Sequential by contract (the
-     * host exposes no dispatcher to plugin code), capped at the page size.
-     * Any failure — token, transport, parse, Google's rate-limit apology —
-     * degrades to an empty page the chain reads as "tier failed"; never
-     * an error.
+     * The fallback tiers for a query the site's own database cannot
+     * address — the listing-lead tier, the direct-results tier, and the
+     * per-word tier, in that order, each degrading to the next on a miss.
+     * One engine call feeds the first two: the element's FIRST page (start
+     * 0) is where Google's ranking of the site's listings lives, so that
+     * one answer is mined for leads and — when no lead serves — its
+     * wallpaper-page results resolve directly, without a second fetch.
+     */
+    private suspend fun searchFallback(
+        query: String,
+        page: Int,
+    ): Page {
+        val key = query.trim().lowercase()
+        val cachedLeads = synchronized(lock) { searchLeads[key] }
+        // Mining is worth a Google round trip only inside the element's own
+        // cursor depth; past it (a deep scroll into a cached lead stream)
+        // the cached leads alone decide, exactly as before.
+        val mined =
+            if (cachedLeads != null || page < 1 || page > CSE_MAX_PAGES) {
+                null
+            } else {
+                fetchCsePage(query, 0)
+            }
+        val leads =
+            cachedLeads
+                ?: mined?.let { rememberLeads(key, HdqWallsCseSearch.listingLeads(it.results)) }
+        if (!leads.isNullOrEmpty()) {
+            leadSearchPage(key, leads, page)?.let { return it }
+        }
+        val direct =
+            if (page == 1 && mined != null) {
+                resolveCseResults(mined)
+            } else {
+                cseSearchPage(query, page)
+            }
+        if (direct.wallpapers.isNotEmpty()) {
+            return direct
+        }
+        return wordSearchPage(query, page) ?: Page(emptyList(), nextPage = null)
+    }
+
+    /**
+     * The listing-lead tier: the ranked leads walked anchor-first — the
+     * anchor being the lead that served this query's earlier pages (the
+     * cache keeping the stream stable), or Google's top-ranked lead when
+     * none has served yet. A lead that answers with wallpapers wins the
+     * whole query, its OWN pagination intact: the site's 18-a-page grid,
+     * Next-bar cursor and all, deeper than Google's ten-page element
+     * cursor. A lead that fails — transport, HTTP, an empty grid — hands
+     * the query to the next lead, never to an error; when every lead is
+     * dead the mining is forgotten so the next page re-derives it.
+     */
+    private suspend fun leadSearchPage(
+        key: String,
+        leads: List<String>,
+        page: Int,
+    ): Page? {
+        if (page < 1 || page > MAX_PAGES) return null
+        val anchor = synchronized(lock) { searchAnchors[key] } ?: leads.first()
+        val ordered = (listOf(anchor) + leads).distinct().take(LEAD_TRY_LIMIT)
+        for (lead in ordered) {
+            val candidate = runCatching { listingPage(lead, page) }.getOrNull() ?: continue
+            if (candidate.wallpapers.isNotEmpty()) {
+                rememberAnchor(key, lead)
+                return candidate
+            }
+        }
+        forgetSearch(key)
+        return null
+    }
+
+    /**
+     * One element-API page at [start], the shared fetch of the fallback
+     * tiers: bootstrap config, then the results call in the element's own
+     * wire shape. Null on any failure — token, transport, parse, Google's
+     * rate-limit apology — the caller's tier degrades, never errors.
+     */
+    private suspend fun fetchCsePage(
+        query: String,
+        start: Int,
+    ): HdqWallsCseSearch.CsePage? {
+        val bootstrap =
+            runCatching { get(HdqWallsCseSearch.BOOTSTRAP_URL) }.getOrNull()
+                ?: return null
+        if (!bootstrap.isSuccessful) return null
+        val config = HdqWallsCseSearch.parseBootstrap(bootstrap.bodyText) ?: return null
+        val response =
+            runCatching {
+                get(HdqWallsCseSearch.resultsUrl(encode(query), start, config))
+            }.getOrNull() ?: return null
+        if (!response.isSuccessful) return null
+        return HdqWallsCseSearch.parseResults(response.bodyText, start)
+    }
+
+    /**
+     * The Google tier for one page: the element's results at this page's
+     * offset, each result resolved — its rich-snippet image when the
+     * response volunteers a real site CDN original, its wallpaper page
+     * otherwise, and only its definitive record at that. Sequential by
+     * contract (the host exposes no dispatcher to plugin code), capped at
+     * the page size. Any failure degrades to an empty page the chain
+     * reads as "tier failed"; never an error.
      */
     private suspend fun cseSearchPage(
         query: String,
         page: Int,
     ): Page {
         if (page < 1 || page > CSE_MAX_PAGES) return Page(emptyList(), nextPage = null)
-        val bootstrap =
-            runCatching { get(HdqWallsCseSearch.BOOTSTRAP_URL) }.getOrNull()
+        val csePage =
+            fetchCsePage(query, (page - 1) * HdqWallsCseSearch.PAGE_SIZE)
                 ?: return Page(emptyList(), nextPage = null)
-        if (!bootstrap.isSuccessful) return Page(emptyList(), nextPage = null)
-        val config = HdqWallsCseSearch.parseBootstrap(bootstrap.bodyText) ?: return Page(emptyList(), nextPage = null)
-        val start = (page - 1) * HdqWallsCseSearch.PAGE_SIZE
-        val response =
-            runCatching {
-                get(HdqWallsCseSearch.resultsUrl(encode(query), start, config))
-            }.getOrNull() ?: return Page(emptyList(), nextPage = null)
-        if (!response.isSuccessful) return Page(emptyList(), nextPage = null)
-        val csePage = HdqWallsCseSearch.parseResults(response.bodyText, start) ?: return Page(emptyList(), nextPage = null)
+        return resolveCseResults(csePage)
+    }
+
+    /**
+     * One engine page to a wallpaper page: every result resolved under
+     * the two guards a Google web result needs before it can be trusted
+     * as a wallpaper, the cursor's next offset read as the next page.
+     * Empty results answer an empty page with NO next — the honest floor.
+     */
+    private suspend fun resolveCseResults(csePage: HdqWallsCseSearch.CsePage): Page {
         if (csePage.results.isEmpty()) return Page(emptyList(), nextPage = null)
         val wallpapers =
             csePage.results
@@ -419,12 +539,16 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
 
     /**
      * The last-resort tier: the query's own words, searched one by one on
-     * the site — longest first (the most specific term wins: `actress`
-     * outranks `indian`), stop words and resolution labels dropped (the
-     * same vocabulary the title tags use), at most [SPLIT_WORD_LIMIT]
-     * words. The first word whose page answers with wallpapers wins, its
-     * own pagination intact. All words miss: null, and the chain returns
-     * an honestly empty page.
+     * the site — stop words and resolution labels dropped (the same
+     * vocabulary the title tags use), at most [SPLIT_WORD_LIMIT] words,
+     * longest first (the most specific term wins: `actress` outranks
+     * `indian`). The RICHEST answer wins, not the first: a page that
+     * continues (the Next bar present — `actress`, 1,029 wallpapers, 58
+     * pages) outranks a bigger dead end (`hollywood`, 2 wallpapers, no
+     * next page), because the deeper stream is the one that keeps
+     * serving the user's scroll. A full batch that continues wins on the
+     * spot — no further word is asked. All words miss: null, and the
+     * chain returns an honestly empty page.
      */
     private suspend fun wordSearchPage(
         query: String,
@@ -438,12 +562,35 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
                 .distinct()
                 .sortedByDescending { it.length }
                 .take(SPLIT_WORD_LIMIT)
+        var best: Page? = null
         for (word in words) {
-            val candidate = listingPage("/search?q=${encode(word)}", page)
-            if (candidate.wallpapers.isNotEmpty()) return candidate
+            // One word's transport or HTTP failure skips that word — the
+            // tier's answer is the richest word that ANSWERED, and a
+            // transient error on one must not fail the search.
+            val candidate =
+                runCatching { listingPage("/search?q=${encode(word)}", page) }.getOrNull()
+                    ?: continue
+            if (candidate.wallpapers.isEmpty()) continue
+            if (candidate.nextPage != null && candidate.wallpapers.size >= FULL_PAGE_FLOOR) return candidate
+            if (best == null || richer(candidate, best)) best = candidate
         }
-        return null
+        return best
     }
+
+    /**
+     * Whether [candidate] serves the query better than [best]: a page
+     * that continues beats one that does not, and among two dead ends the
+     * bigger batch wins.
+     */
+    private fun richer(
+        candidate: Page,
+        best: Page,
+    ): Boolean =
+        when {
+            candidate.nextPage != null && best.nextPage == null -> true
+            candidate.nextPage == null && best.nextPage == null && candidate.wallpapers.size > best.wallpapers.size -> true
+            else -> false
+        }
 
     // ------------------------------------------------------------- mapping
 
@@ -494,6 +641,44 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
         return wallpapers
     }
 
+    /**
+     * The search fallback's caches — the mined leads and the serving
+     * anchor, query-keyed, bounded and self-healing: a full cache clears
+     * wholesale (the next search re-mines), a fresh instance starts
+     * empty, and every entry is recomputable from the sources. The
+     * remembered leads return as the caller's value — the cache is a
+     * memo, not a second source of truth.
+     */
+    private fun rememberLeads(
+        key: String,
+        leads: List<String>,
+    ): List<String> {
+        synchronized(lock) {
+            if (searchLeads.size >= SEARCH_CACHE_LIMIT) searchLeads.clear()
+            searchLeads[key] = leads
+        }
+        return leads
+    }
+
+    /** Remembers the lead that served a query, keeping its stream stable. */
+    private fun rememberAnchor(
+        key: String,
+        lead: String,
+    ) {
+        synchronized(lock) {
+            if (searchAnchors.size >= SEARCH_CACHE_LIMIT) searchAnchors.clear()
+            searchAnchors[key] = lead
+        }
+    }
+
+    /** Forgets a query's mining — every lead proved dead; the next page re-derives. */
+    private fun forgetSearch(key: String) {
+        synchronized(lock) {
+            searchLeads.remove(key)
+            searchAnchors.remove(key)
+        }
+    }
+
     // ------------------------------------------------------------- plumbing
 
     private suspend fun get(url: String): ProviderHttpResponse =
@@ -533,6 +718,15 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
 
         /** Result pages resolved eagerly per fallback page (the page size). */
         const val CSE_RESOLVE_LIMIT = 10
+
+        /** The listing-lead tier's try cap: the anchor, then the next-ranked leads. */
+        const val LEAD_TRY_LIMIT = 3
+
+        /** The search caches' entry cap; a full cache clears wholesale. */
+        const val SEARCH_CACHE_LIMIT = 8
+
+        /** A full listing batch (18 live) with this much slack continues on the spot. */
+        const val FULL_PAGE_FLOOR = 15
 
         /** The per-word tier's word cap: three tries, longest first. */
         const val SPLIT_WORD_LIMIT = 3
@@ -578,4 +772,8 @@ class HdqWallsWallpaperProvider : WallpaperProvider {
     }
 
     private val tagPool = LinkedHashSet<String>()
+
+    /** The search fallback's query-keyed caches; see [rememberLeads]. */
+    private val searchLeads = HashMap<String, List<String>>()
+    private val searchAnchors = HashMap<String, String>()
 }
