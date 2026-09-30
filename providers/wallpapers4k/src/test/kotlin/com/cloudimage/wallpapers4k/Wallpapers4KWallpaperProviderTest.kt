@@ -121,6 +121,90 @@ class Wallpapers4KWallpaperProviderTest {
         """.trimIndent()
 
     /**
+     * The landing flavor's pager, cut from the live `/anime/` results a
+     * `?q=anime` search becomes after the 301 the host's client follows:
+     * REAL anchors with relative `?page=N` hrefs, Next among them — and
+     * only the active marker carrying `data-page`, the exact shape the
+     * marker-only reader misread as "last page, walk over".
+     */
+    private val landingPager =
+        """
+        <p class="pages"><strong class="active" data-page="1">1</strong> <a  data-ripples href="?page=2">2</a> <a  data-ripples href="?page=3">3</a> <span>&hellip;</span> <a data-ripples href="?page=78">78</a>  <a data-ripples href="?page=2" class="ctrl-right">Next &rsaquo;</a></p>
+        """.trimIndent()
+
+    /** The same landing pager, mid-walk and hidden (the spiderman shape). */
+    private val landingPagerPageTwo =
+        """
+        <p class="pages" style="display: none;"><strong class="ctrl-left" >&lsaquo; Previous</strong> <strong data-page="1">1</strong> <strong class="active" data-page="2">2</strong> <a data-ripples href="?page=3">3</a> <span>&hellip;</span> <a data-ripples href="?page=78">78</a>  <a data-ripples href="?page=3" class="ctrl-right">Next &rsaquo;</a></p>
+        """.trimIndent()
+
+    /** The landing's last page — Previous only, no ctrl-right: the walk ends. */
+    private val landingPagerLast =
+        """
+        <p class="pages"><a data-ripples href="?page=77" class="ctrl-left">&lsaquo; Previous</a> <strong class="active" data-page="78">78</strong></p>
+        """.trimIndent()
+
+    /**
+     * The phrase-exact nothing: the shell the site serves when its own
+     * database has no match (`4k wallpapers`, `anime wallpapers`…), whose
+     * grid a browser fills with client-side Google results no scraper can
+     * read — zero cells, no pager, nothing to walk.
+     */
+    private val gsearchEmpty =
+        """
+        <h1><span class="main">Search results for - 4k-wallpapers</span></h1>
+        <div class="pics" id="pics-list"></div>
+        <script async src="https://cse.google.com/cse.js?cx=TEMPLATE"></script>
+        """.trimIndent()
+
+    /**
+     * The big featured cell of the resolution-style landings, cut from the
+     * live `/3840x2160-4k-uhd-wallpapers/` grid: the contentUrl link
+     * discloses the ORIGINAL FILE (the Download target), the preview rides
+     * the thumbnail img, and the page anchor is a bare `itemprop="url"`
+     * shell AFTER the img — the flavor the preview-blind reader dropped
+     * whole (0 of 34 cells parsed, live).
+     */
+    private val bigLandingCell =
+        """
+        <p itemprop="associatedMedia" itemscope itemtype="http://schema.org/ImageObject" class="wallpapers__item big">
+        <meta itemprop="keywords" content="Xiaomi 18 Fold, Stock, Abstract art, 3D Render, Glass, Dark background"> <link itemprop="contentUrl" href="/images/wallpapers/xiaomi-18-fold-3840x2160-27263.jpg">
+        <span class="wallpapers__canvas ripple">
+        <img itemprop="thumbnail" src="/images/walls/thumbs/27263.jpg" fetchpriority="high"  srcset="/images/walls/thumbs/27263.jpg 400w,/images/walls/thumbs_2t/27263.jpg 800w" width="400" height="225" alt="Xiaomi 18 Fold, Stock, Abstract art, 3D Render, Glass, Dark background"/>
+        <span itemprop="caption description" class="title tags">Xiaomi 18 Fold, Stock, Abstract art</span><span class="title type"><a title="View original Xiaomi 18 Fold Wallpaper" itemprop="url" data-ripples href="/abstract/xiaomi-18-fold-27263.html" title="View Original"></a><a data-ripples href="/images/wallpapers/xiaomi-18-fold-3840x2160-27263.jpg" target="_blank"><span class="dl-label">Download</span></a>
+        </span>
+        </span></p>
+        """.trimIndent()
+
+    /** One landing grid cell — the shared shape, ids distinct per page. */
+    private fun landingCell(n: Int): String =
+        """
+        <p itemprop="associatedMedia" itemscope itemtype="http://schema.org/ImageObject" class="wallpapers__item" ><meta itemprop="keywords" content="Anime Scene $n, Anime, 4K"> <link itemprop="contentUrl" href="/images/walls/thumbs_2t/${27000 + n}.jpg">
+                                        <a title="Anime Scene $n Wallpaper" itemprop="url" data-ripples class="wallpapers__canvas_image"  href="/anime/anime-scene-$n-${27000 + n}.html">
+                                        <span class="wallpapers__canvas ripple">
+                                        <img itemprop="thumbnail" src="/images/walls/thumbs/${27000 + n}.jpg" loading="lazy" width="400" height="225" alt="Anime Scene $n, Anime, 4K"/>
+                                        </span></a>
+                                        </p>
+        """.trimIndent()
+
+    /** A landing grid of [count] cells starting at id [from]. */
+    private fun landingCells(
+        count: Int,
+        from: Int,
+    ): String = (from until from + count).joinToString("\n") { landingCell(it) }
+
+    /** A landing-flavored page: canonical base, grid, anchor pager. */
+    private fun landingPage(
+        cells: String,
+        bar: String,
+        canonical: String = "https://4kwallpapers.com/anime/",
+    ): String = "<link rel=\"canonical\" href=\"$canonical\" />\n$cells\n$bar"
+
+    /** The `4k` landing's first page — grid, anchor pager, canonical and all. */
+    private val fourKLanding =
+        landingPage(landingCells(16, 1), landingPager, canonical = "https://4kwallpapers.com/3840x2160-4k-uhd-wallpapers/")
+
+    /**
      * A wallpaper page — the page-level keywords meta, the contentUrl
      * preview image, the resolution menu with its labeled original, the
      * category/tag rows, and one lean related cell (no meta, no link —
@@ -428,6 +512,241 @@ class Wallpapers4KWallpaperProviderTest {
             assertTrue(page.wallpapers.isNotEmpty())
         }
 
+    // ------------------------------------------------- the landing flavor
+
+    @Test
+    fun `a landing query page one reads the anchor pager the marker reader could not`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/?q=anime" to ok(landingPage(landingCells(16, 1), landingPager)),
+                    ),
+                )
+
+            val page = provider.search(query = "anime", page = 1).getOrThrow()
+
+            assertEquals("https://4kwallpapers.com/search/?q=anime", client.requests.single())
+            assertEquals(16, page.wallpapers.size)
+            assertEquals("the landing's own Next anchor offers page two", 2, page.nextPage)
+        }
+
+    @Test
+    fun `a landing query page two walks the canonical base the landing disclosed`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/?q=anime" to ok(landingPage(landingCells(16, 1), landingPager)),
+                        "https://4kwallpapers.com/anime/?page=2" to ok(landingCells(16, 17) + landingPagerPageTwo),
+                    ),
+                )
+
+            provider.search(query = "anime", page = 1).getOrThrow()
+            val page2 = provider.search(query = "anime", page = 2).getOrThrow()
+
+            assertEquals(
+                "the deep page rides the base, not the load-more form",
+                listOf("https://4kwallpapers.com/search/?q=anime", "https://4kwallpapers.com/anime/?page=2"),
+                client.requests,
+            )
+            assertEquals(16, page2.wallpapers.size)
+            assertEquals("anime/anime-scene-17-27017.html", page2.wallpapers.first().id)
+            assertEquals("the anchor pager keeps offering the walk", 3, page2.nextPage)
+        }
+
+    @Test
+    fun `a landing deep page after a restart recovers from the redirect trap`() =
+        runTest {
+            // Fresh instance, no memory: the load-more form bounces back to
+            // the landing's FIRST page (the host client follows the 301, the
+            // page parameter is dropped) — the bar's active marker catches
+            // the lie and the walk re-rides the canonical base.
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/anime?page=2" to ok(landingPage(landingCells(16, 1), landingPager)),
+                        "https://4kwallpapers.com/anime/?page=2" to ok(landingCells(16, 17) + landingPagerPageTwo),
+                    ),
+                )
+
+            val page2 = provider.search(query = "anime", page = 2).getOrThrow()
+
+            assertEquals(
+                listOf("https://4kwallpapers.com/search/anime?page=2", "https://4kwallpapers.com/anime/?page=2"),
+                client.requests,
+            )
+            assertEquals("page two's own items, never page one's again", "anime/anime-scene-17-27017.html", page2.wallpapers.first().id)
+            assertEquals(16, page2.wallpapers.size)
+        }
+
+    @Test
+    fun `the landing walk stops where the site's own bar stops`() =
+        runTest {
+            configureWith(
+                linkedMapOf(
+                    "https://4kwallpapers.com/search/?q=anime" to ok(landingPage(landingCells(16, 1), landingPager)),
+                    "https://4kwallpapers.com/anime/?page=78" to ok(landingCells(11, 77) + landingPagerLast),
+                ),
+            )
+
+            provider.search(query = "anime", page = 1).getOrThrow()
+            val last = provider.search(query = "anime", page = 78).getOrThrow()
+
+            assertEquals(11, last.wallpapers.size)
+            assertNull("no ctrl-right anchor on the landing's last page", last.nextPage)
+        }
+
+    @Test
+    fun `a redirected deep page with no canonical stops honestly`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/anime?page=2" to ok(landingCells(16, 1) + landingPager),
+                    ),
+                )
+
+            val page = provider.search(query = "anime", page = 2).getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+            assertEquals("no base to walk — one request, no page one served twice", 1, client.requests.size)
+        }
+
+    // ------------------------------------------------------ the word tier
+
+    @Test
+    fun `a phrase the site answers with nothing rides its richest word`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/?q=4k%20wallpapers" to ok(gsearchEmpty),
+                        "https://4kwallpapers.com/search/?q=4k" to ok(fourKLanding),
+                    ),
+                )
+
+            val page = provider.search(query = "4k wallpapers", page = 1).getOrThrow()
+
+            assertEquals(
+                "the rich word wins on the spot — the dead word is never probed",
+                listOf("https://4kwallpapers.com/search/?q=4k%20wallpapers", "https://4kwallpapers.com/search/?q=4k"),
+                client.requests,
+            )
+            assertEquals(16, page.wallpapers.size)
+            assertEquals("the rescued stream paginates like the site's own", 2, page.nextPage)
+        }
+
+    @Test
+    fun `the rescued stream is remembered for deeper pages`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/?q=4k%20wallpapers" to ok(gsearchEmpty),
+                        "https://4kwallpapers.com/search/?q=4k" to ok(fourKLanding),
+                        "https://4kwallpapers.com/3840x2160-4k-uhd-wallpapers/?page=2" to ok(landingCells(16, 17) + landingPagerPageTwo),
+                    ),
+                )
+
+            provider.search(query = "4k wallpapers", page = 1).getOrThrow()
+            val page2 = provider.search(query = "4k wallpapers", page = 2).getOrThrow()
+
+            assertEquals(
+                "page two rides the remembered stream's base — no re-derivation",
+                "https://4kwallpapers.com/3840x2160-4k-uhd-wallpapers/?page=2",
+                client.requests.last(),
+            )
+            assertEquals(16, page2.wallpapers.size)
+        }
+
+    @Test
+    fun `a restart mid-walk re-derives the rescued stream`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/4k%20wallpapers?page=2" to ok(gsearchEmpty),
+                        "https://4kwallpapers.com/search/?q=4k%20wallpapers" to ok(gsearchEmpty),
+                        "https://4kwallpapers.com/search/?q=4k" to ok(fourKLanding),
+                        "https://4kwallpapers.com/3840x2160-4k-uhd-wallpapers/?page=2" to ok(landingCells(16, 17) + landingPagerPageTwo),
+                    ),
+                )
+
+            val page2 = provider.search(query = "4k wallpapers", page = 2).getOrThrow()
+
+            assertEquals(
+                listOf(
+                    "https://4kwallpapers.com/search/4k%20wallpapers?page=2",
+                    "https://4kwallpapers.com/search/?q=4k%20wallpapers",
+                    "https://4kwallpapers.com/search/?q=4k",
+                    "https://4kwallpapers.com/3840x2160-4k-uhd-wallpapers/?page=2",
+                ),
+                client.requests,
+            )
+            assertEquals(16, page2.wallpapers.size)
+            assertEquals("anime/anime-scene-17-27017.html", page2.wallpapers.first().id)
+        }
+
+    @Test
+    fun `the word tier prefers the biggest batch when none continues`() =
+        runTest {
+            configureWith(
+                linkedMapOf(
+                    "https://4kwallpapers.com/search/?q=best%20wallpapers" to ok(gsearchEmpty),
+                    "https://4kwallpapers.com/search/?q=best" to ok(landingCells(12, 1)),
+                    "https://4kwallpapers.com/search/?q=wallpapers" to ok(gsearchEmpty),
+                ),
+            )
+
+            val page = provider.search(query = "best wallpapers", page = 1).getOrThrow()
+
+            assertEquals("the bigger dead end beats the smaller one", 12, page.wallpapers.size)
+            assertNull("no next page was offered by either word", page.nextPage)
+        }
+
+    @Test
+    fun `a phrase whose own stream ended stops honestly`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/night%20city?page=5" to ok(gsearchEmpty),
+                        "https://4kwallpapers.com/search/?q=night%20city" to ok(searchGrid + searchPager),
+                    ),
+                )
+
+            val page = provider.search(query = "night city", page = 5).getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+            assertEquals(
+                "the phrase's own page one has content — the stream ENDED, no word tier",
+                listOf("https://4kwallpapers.com/search/night%20city?page=5", "https://4kwallpapers.com/search/?q=night%20city"),
+                client.requests,
+            )
+        }
+
+    @Test
+    fun `when every word serves nothing the empty page stands`() =
+        runTest {
+            val client =
+                configureWith(
+                    linkedMapOf(
+                        "https://4kwallpapers.com/search/?q=zz%20xx" to ok(gsearchEmpty),
+                        "https://4kwallpapers.com/search/?q=zz" to ok(gsearchEmpty),
+                        "https://4kwallpapers.com/search/?q=xx" to ok(gsearchEmpty),
+                    ),
+                )
+
+            val page = provider.search(query = "zz xx", page = 1).getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+            assertEquals(3, client.requests.size)
+        }
+
     // -------------------------------------------------------------- details
 
     @Test
@@ -609,5 +928,58 @@ class Wallpapers4KWallpaperProviderTest {
 
         assertNull(Wallpapers4KParser.parseSearchNextPage(bar))
         assertNull(Wallpapers4KParser.parseSearchNextPage("<div>no pager at all</div>"))
+    }
+
+    @Test
+    fun `the big featured cell parses - preview from the img, original by disclosure`() {
+        val items = Wallpapers4KParser.parseGrid(bigLandingCell)
+
+        val item = items.single()
+        assertEquals("abstract/xiaomi-18-fold-27263.html", item.id)
+        assertEquals(
+            "the preview rides the thumbnail img, not the original-file link",
+            "https://4kwallpapers.com/images/walls/thumbs/27263.jpg",
+            item.thumbUrl,
+        )
+        assertEquals(
+            "the original derives from the preview by directory disclosure",
+            "https://4kwallpapers.com/images/walls/orig/27263.jpg",
+            item.originalUrl,
+        )
+        assertEquals("Xiaomi 18 Fold", item.title)
+        assertTrue(item.tags.contains("Abstract art"))
+    }
+
+    @Test
+    fun `the search pager reads the landing flavor's next anchor`() {
+        assertEquals(2, Wallpapers4KParser.parseSearchNextPage(landingPager))
+        assertEquals("mid-walk, hidden bar, anchors still real", 3, Wallpapers4KParser.parseSearchNextPage(landingPagerPageTwo))
+        assertNull("no ctrl-right on the landing's last page", Wallpapers4KParser.parseSearchNextPage(landingPagerLast))
+    }
+
+    @Test
+    fun `parseActivePage reads the page the bar itself says is served`() {
+        assertEquals(1, Wallpapers4KParser.parseActivePage(landingPager))
+        assertEquals(2, Wallpapers4KParser.parseActivePage(searchPagerPageTwo))
+        assertEquals(78, Wallpapers4KParser.parseActivePage(landingPagerLast))
+        assertNull(Wallpapers4KParser.parseActivePage(gsearchEmpty))
+    }
+
+    @Test
+    fun `parseCanonicalBase reads only this site's own disclosed base`() {
+        assertEquals(
+            "https://4kwallpapers.com/anime/",
+            Wallpapers4KParser.parseCanonicalBase("<link rel=\"canonical\" href=\"https://4kwallpapers.com/anime/?utm=x\" />"),
+        )
+        assertEquals(
+            "site-relative canonical becomes absolute",
+            "https://4kwallpapers.com/anime/",
+            Wallpapers4KParser.parseCanonicalBase("<link href=\"/anime/\" rel=\"canonical\" />"),
+        )
+        assertNull(
+            "a foreign canonical is never walked",
+            Wallpapers4KParser.parseCanonicalBase("<link rel=\"canonical\" href=\"https://evil.example/x\" />"),
+        )
+        assertNull(Wallpapers4KParser.parseCanonicalBase("<link rel=\"stylesheet\" href=\"/x.css\" />"))
     }
 }

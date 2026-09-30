@@ -53,20 +53,29 @@ import java.net.URLEncoder
  *   grid — the site's freshest uploads, paginated nearly a thousand pages
  *   deep — and everything else lands on the popular ranking, the default
  *   feed the browse tab shows first.
- * - [search] rides the site's real search, page by page: the first page
- *   answers `/search/?q=`, every deeper page walks the same load-more
- *   form the site's own "Load more" button requests —
- *   `/search/{query}?page=N` — and BOTH carry the query percent-encoded
- *   with spaces as `%20` (the site reads its `?q=` as a raw token: the
- *   `+` form encoding serves zero multi-word results and the paged path
- *   answers it 404 — verified live). The hidden pages bar's markers say
- *   when more remain, so `nextPage` is honest and the walk stops where
- *   the site's own walk stops. A blank query (the contract's escape
- *   hatch) lands on the trending feed's first page, the same default the
- *   blank popular feed would show. The query-preset shelves ride this
- *   search; a term that names a category returns that category's content
- *   (verified live: `nature` — 21 of the first twenty-four results are
- *   the Nature listing's own page one).
+ * - [search] rides the site's real search, page by page — and through
+ *   BOTH of the flavors it answers in. A plain query (`nature`, `indian
+ *   actress`) serves the hidden marker pager and paginates on
+ *   `/search/{query}?page=N`, both with the query percent-encoded as
+ *   `%20` (the site reads its `?q=` as a raw token: the `+` form encoding
+ *   serves zero multi-word results and the paged path answers it 404 —
+ *   verified live). A query the site files under one of its own curated
+ *   landings (`anime` → `/anime/`, `4k` → `/3840x2160-4k-uhd-wallpapers/`)
+ *   answers with a 301 the host's client follows to the landing itself,
+ *   whose REAL anchor pager paginates on the landing's own path — the
+ *   deep `/search/{query}?page=N` form would bounce back to the landing's
+ *   FIRST page with the parameter dropped, so the walk rides the canonical
+ *   base the landing discloses instead. And a phrase the site's own
+ *   database answers with NOTHING (its search is phrase-exact: `4k
+ *   wallpapers`, `anime wallpapers`, `abstract wallpaper` all serve zero
+ *   cells, leaving a browser only client-side Google results) falls back
+ *   to the query's richest word — the same rescue tier the hdqwalls
+ *   provider pioneered. A blank query (the contract's escape hatch) lands
+ *   on the trending feed's first page, the same default the blank popular
+ *   feed would show. The query-preset shelves ride this search; a term
+ *   that names a category returns that category's content (verified live:
+ *   `nature` — 21 of the first twenty-four results are the Nature
+ *   listing's own page one).
  * - [sections] offers fourteen shelves: Popular, Latest (the host
  *   `sorting=date` preset), Anime and People (the host `category`
  *   vocabulary), and tag-style `query` presets for Nature, Space,
@@ -129,7 +138,7 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "4K Wallpapers",
-            versionName = "1.1.0",
+            versionName = "1.2.0",
             author = "Cloudimage",
             description = "4K, 5K, 8K and up wallpapers from 4kwallpapers.com - scraped, keyless.",
             // The site curates its uploads and carries no per-item rating
@@ -169,15 +178,20 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
         }
 
     /**
-     * The site's real search, page by page. Page one answers the form's
-     * own `/search/?q=`; every deeper page walks the load-more form the
-     * site's "Load more" button itself requests — `/search/{query}?page=N`
-     * — so the app scrolls the exact stream the website scrolls (verified
-     * live: `indian actress` walks 18 distinct pages the browser walk
-     * walks). The hidden pages bar's markers gate `nextPage`, a 404
-     * answers honestly empty, and a blank query (the contract's escape
-     * hatch) lands on the trending feed's first page, the same default the
-     * blank popular feed would show.
+     * The site's real search, page by page — and through both of the
+     * flavors it answers in. Page one answers the form's own `/search/?q=`;
+     * a plain query's deeper pages walk the load-more form the site's
+     * "Load more" button itself requests — `/search/{query}?page=N` — while
+     * a landing query's deeper pages walk the canonical base its landing
+     * discloses, because the site bounces the load-more form back to the
+     * landing's FIRST page with the page parameter dropped (verified live:
+     * `/search/anime?page=2` serves `/anime/`'s page one). A phrase the
+     * site answers with nothing rides its richest word, so the app scrolls
+     * a real stream where the raw phrase would serve an empty grid. The
+     * bar's own signals gate `nextPage` in both flavors, a 404 answers
+     * honestly empty, and a blank query (the contract's escape hatch)
+     * lands on the trending feed's first page, the same default the blank
+     * popular feed would show.
      */
     override suspend fun search(
         query: String,
@@ -310,41 +324,133 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
     }
 
     /**
-     * One page of the site's search stream. Page one rides the form's own
-     * `?q=` address; deeper pages ride the load-more form the site's own
-     * button requests — and BOTH carry the query percent-encoded with
-     * spaces as `%20`: this site's search reads its parameter as a raw
-     * percent-encoded token, not a form encoding, so the `+` URLEncoder
-     * produces answers ZERO results for a multi-word query (verified live:
-     * `?q=indian+actress` serves nothing, `?q=indian%20actress` serves
-     * twenty-four), and inside the paged PATH a `+` is a literal plus that
-     * answers 404. The hidden pages bar's `active`/`data-page` markers
-     * decide `nextPage` — the same pair the site's script walks — and a
-     * 404 degrades to an honest empty page instead of a source failure.
+     * One page of the site's search stream, in whatever flavor the query
+     * lands in. A resolved stream rides it directly; an unresolved one
+     * walks the query itself first and — when the site's phrase-exact
+     * database answers a multi-word phrase with nothing — falls back to
+     * the query's richest word, remembered so deeper pages walk the same
+     * stream without re-deriving it. A deep page that comes back empty is
+     * distinguished by one probe: a phrase whose own page one has content
+     * simply ended (stop honestly), while a phrase with nothing on page
+     * one is a rescued query re-derived after a restart.
      */
     private suspend fun searchPage(
         query: String,
         page: Int,
     ): Page {
         if (page < 1 || page > MAX_PAGES) return Page(emptyList(), nextPage = null)
-        val term = encodeSearchTerm(query)
-        val url =
-            if (page == 1) {
-                "$BASE_URL/search/?q=$term"
-            } else {
-                "$BASE_URL/search/$term?page=$page"
-            }
+        val stream = synchronized(lock) { searchStreams[query] }
+        if (stream != null) return termPage(stream, page)
+        val direct = termPage(query, page)
+        if (direct.wallpapers.isNotEmpty() || !rescuable(query)) return direct
+        if (page > 1) {
+            val first = termPage(query, 1)
+            if (first.wallpapers.isNotEmpty()) return direct
+        }
+        return wordRescue(query, page) ?: direct
+    }
+
+    /**
+     * One page of ONE term's stream. Page one rides the form's own `?q=`
+     * address; deeper pages ride the load-more form — and BOTH carry the
+     * term percent-encoded with spaces as `%20`: this site's search reads
+     * its parameter as a raw percent-encoded token, not a form encoding,
+     * so the `+` URLEncoder produces answers ZERO results for a multi-word
+     * query (verified live: `?q=indian+actress` serves nothing,
+     * `?q=indian%20actress` serves twenty-four), and inside the paged PATH
+     * a `+` is a literal plus that answers 404. A landing term — one the
+     * site answers with its own curated page — walks the canonical base
+     * that page discloses: the deep `/search/{term}?page=N` form bounces
+     * back to the landing's FIRST page with the parameter dropped (the
+     * bar's active marker catches the lie), so without a base to walk the
+     * honest answer is an empty page rather than page one served twice.
+     */
+    private suspend fun termPage(
+        term: String,
+        page: Int,
+    ): Page {
+        val base = synchronized(lock) { landingBases[term] }
+        if (page > 1 && base != null) return landingSearchPage(base, page)
+        val encoded = encodeSearchTerm(term)
+        val url = if (page == 1) "$BASE_URL/search/?q=$encoded" else "$BASE_URL/search/$encoded?page=$page"
         val response = get(url)
-        if (response.statusCode == NOT_FOUND) {
-            return Page(emptyList(), nextPage = null)
+        if (response.statusCode == NOT_FOUND) return Page(emptyList(), nextPage = null)
+        if (!response.isSuccessful) throw httpError(response.statusCode)
+        val html = response.bodyText
+        if (page == 1) {
+            Wallpapers4KParser.parseCanonicalBase(html)?.let { rememberBase(term, it) }
+        } else {
+            val served = Wallpapers4KParser.parseActivePage(html)
+            if (served != null && served != page) {
+                val canonical = Wallpapers4KParser.parseCanonicalBase(html) ?: return Page(emptyList(), nextPage = null)
+                rememberBase(term, canonical)
+                return landingSearchPage(canonical, page)
+            }
         }
-        if (!response.isSuccessful) {
-            throw httpError(response.statusCode)
-        }
+        val wallpapers =
+            Wallpapers4KParser.parseGrid(html).map(::gridWallpaper).let(::rememberTagsIn)
+        return Page(wallpapers, nextPage = Wallpapers4KParser.parseSearchNextPage(html))
+    }
+
+    /**
+     * One page of a landing's own grid — the walk the landing's own pager
+     * anchors spell out, `?page=N` on the base the page discloses. A 404
+     * degrades to an honest empty page, exactly like the search walk.
+     */
+    private suspend fun landingSearchPage(
+        base: String,
+        page: Int,
+    ): Page {
+        val response = get("$base?page=$page")
+        if (response.statusCode == NOT_FOUND) return Page(emptyList(), nextPage = null)
+        if (!response.isSuccessful) throw httpError(response.statusCode)
         val wallpapers =
             Wallpapers4KParser.parseGrid(response.bodyText).map(::gridWallpaper).let(::rememberTagsIn)
         return Page(wallpapers, nextPage = Wallpapers4KParser.parseSearchNextPage(response.bodyText))
     }
+
+    /**
+     * The word tier: the site's search is phrase-exact, so a natural
+     * multi-word phrasing (`4k wallpapers`, `anime wallpapers`) can serve
+     * zero cells even though each word alone serves a full stream. Each
+     * word's page one is probed in query order — a word already serving a
+     * real batch WITH a next page wins on the spot, else the biggest batch
+     * wins — and the winner is remembered as the query's stream. A word
+     * whose page one fails transports skips the ranking entirely; when no
+     * word serves anything the caller keeps its honest empty page.
+     */
+    private suspend fun wordRescue(
+        query: String,
+        page: Int,
+    ): Page? {
+        var bestWord = ""
+        var bestPage: Page? = null
+        for (word in rescueWords(query)) {
+            val candidate = termPage(word, 1)
+            val rich = candidate.wallpapers.size >= RICH_BATCH && candidate.nextPage != null
+            val bestCount = bestPage?.wallpapers?.size ?: -1
+            if (rich || candidate.wallpapers.size > bestCount) {
+                bestWord = word
+                bestPage = candidate
+            }
+            if (rich) break
+        }
+        val winner = bestPage?.takeIf { it.wallpapers.isNotEmpty() } ?: return null
+        rememberStream(query, bestWord)
+        return if (page == 1) winner else termPage(bestWord, page)
+    }
+
+    /** The rescue tier's candidates: distinct words, query order, capped. */
+    private fun rescueWords(query: String): List<String> =
+        query
+            .trim()
+            .split(WORD_SPLIT)
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .take(WORD_PROBE_LIMIT)
+
+    /** A query is rescuable only when it has more than one distinct word. */
+    private fun rescuable(query: String): Boolean = rescueWords(query).size > 1
 
     /** The trending batch — the homepage grid, no pagination signal worth reading. */
     private suspend fun trendingBatch(): List<Wallpaper> {
@@ -389,6 +495,28 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
             }
         }
         return wallpapers
+    }
+
+    /** Remembers the stream a query rides, bounded; eldest evicted first. */
+    private fun rememberStream(
+        query: String,
+        term: String,
+    ) {
+        synchronized(lock) {
+            searchStreams[query] = term
+            while (searchStreams.size > STREAM_LIMIT) searchStreams.remove(searchStreams.keys.first())
+        }
+    }
+
+    /** Remembers the base a landing term walks, bounded; eldest evicted first. */
+    private fun rememberBase(
+        term: String,
+        base: String,
+    ) {
+        synchronized(lock) {
+            landingBases[term] = base
+            while (landingBases.size > STREAM_LIMIT) landingBases.remove(landingBases.keys.first())
+        }
     }
 
     // ------------------------------------------------------------- plumbing
@@ -438,6 +566,23 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
         /** Deep-pagination cap: a hundred pages, twenty-four items each. */
         const val MAX_PAGES = 100
 
+        /**
+         * The word tier's early-stop bar: a word already serving this many
+         * cells WITH a next page is the winner on the spot — a continuing
+         * stream beats a bigger dead end, exactly the rule the hdqwalls
+         * provider's word tier settled on.
+         */
+        const val RICH_BATCH = 15
+
+        /** The word tier probes at most four words per zero-result query. */
+        const val WORD_PROBE_LIMIT = 4
+
+        /** The per-query stream and landing-base memories' shared bound. */
+        const val STREAM_LIMIT = 8
+
+        /** A word split forgiving of any whitespace the search box passes. */
+        val WORD_SPLIT = Regex("\\s+")
+
         /** The site's not-found answer, degraded to an honest empty search page. */
         const val NOT_FOUND = 404
 
@@ -451,4 +596,10 @@ class Wallpapers4KWallpaperProvider : WallpaperProvider {
     }
 
     private val tagPool = LinkedHashSet<String>()
+
+    /** The stream each query rides: the query, or its richest word. */
+    private val searchStreams = LinkedHashMap<String, String>()
+
+    /** The canonical base each landing term's deep pages walk. */
+    private val landingBases = LinkedHashMap<String, String>()
 }

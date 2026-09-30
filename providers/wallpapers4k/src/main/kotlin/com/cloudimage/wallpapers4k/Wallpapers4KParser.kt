@@ -98,6 +98,9 @@ internal object Wallpapers4KParser {
             RegexOption.DOT_MATCHES_ALL,
         )
 
+    /** The page's canonical URL — the landing flavor's own disclosed base. */
+    private val CANONICAL = Regex("""<link\b[^>]*rel=["']canonical["'][^>]*>""")
+
     /** A page number inside a query string, after entity unescaping. */
     private val PAGE_IN_QUERY = Regex("""[?&]page=(\d+)""")
 
@@ -149,12 +152,19 @@ internal object Wallpapers4KParser {
     }
 
     /**
-     * One cell, in two flavors the site actually serves: the full listing
-     * cell (keywords meta + contentUrl link + thumbnail img) and the lean
+     * One cell, in the flavors the site actually serves: the full listing
+     * cell (keywords meta + contentUrl link + thumbnail img), the lean
      * related-cell on wallpaper pages (anchor + img only, but the img's
-     * `alt` repeats the very same title-and-tags string). The preview falls
-     * back from the cell's own contentUrl link to its thumbnail img; the
-     * title and tags fall back from the keywords meta to that alt.
+     * `alt` repeats the very same title-and-tags string), and the big
+     * featured cell of the resolution-style landings — whose contentUrl
+     * link discloses the ORIGINAL FILE itself
+     * (`/images/wallpapers/{slug}-{res}-{id}.jpg`, the Download target)
+     * rather than the preview. The preview therefore prefers a
+     * thumbs-directory source in ANY flavor — the contentUrl link when it
+     * IS the 800px preview, else the cell's own thumbnail img — and the
+     * original derives from that preview by directory disclosure as
+     * always. The title and tags fall back from the keywords meta to the
+     * img's alt.
      */
     private fun parseCell(cell: String): GridItem? {
         val id =
@@ -168,7 +178,10 @@ internal object Wallpapers4KParser {
             ANY_IMG
                 .findAll(cell)
                 .firstOrNull { tag -> attributes(tag.value)["src"].orEmpty().contains("/images/walls/thumbs") }
-        val thumbPath = contentUrl ?: img?.let { attributes(it.value)["src"] } ?: return null
+        val thumbPath =
+            contentUrl?.takeIf { THUMB_DIR.matches(it) }
+                ?: img?.let { attributes(it.value)["src"] }
+                ?: return null
         val originalUrl = toOriginalUrl(absolutize(thumbPath)) ?: return null
         val keywords = keywordsOf(cell) ?: img?.let { attributes(it.value)["alt"] }
         val segments =
@@ -210,27 +223,42 @@ internal object Wallpapers4KParser {
 
     /**
      * The next page of a SEARCH results page, read from the same `p.pages`
-     * bar in its hidden, script-driven flavor: on search pages the site
-     * swaps the anchor links for bare `<strong data-page="N">` markers,
-     * hides the bar (`style="display: none"`) and lets its "Load more"
-     * button request `/search/{query}?page=N` client-side. The markers
-     * still disclose everything: the `active` strong is the page being
-     * served and the largest `data-page` is the result set's last page
-     * (verified live: `indian actress` shows 1 … 18 and the site serves
-     * distinct grids through page 18). More pages remain exactly when
-     * active < last — the JS walks the very same pair. A page without the
-     * bar (zero results) or without an active marker reads as "nothing
-     * more" — the honest stop.
+     * bar — which the site serves in TWO flavors, depending on where the
+     * query lands:
+     *
+     * - the hidden, script-driven flavor (a plain search): anchors become
+     *   bare `<strong data-page="N">` markers, the bar hides, and the
+     *   "Load more" button requests `/search/{query}?page=N` client-side.
+     *   The markers still disclose everything: the `active` strong is the
+     *   page being served and the largest `data-page` is the result set's
+     *   last page (verified live: `indian actress` shows 1 … 18 and serves
+     *   distinct grids through page 18). More pages remain exactly when
+     *   active < last — the JS walks the very same pair.
+     * - the landing flavor (a query the site redirects to its own curated
+     *   landing, e.g. `anime` → `/anime/`, `4k` → `/3840x2160-4k-uhd-
+     *   wallpapers/`): the bar's links are REAL anchors with relative
+     *   `?page=N` hrefs and the Next control is one of them — the same
+     *   ctrl-right contract [parseNextPage] reads on the listings, absent
+     *   on the last page (verified live: `/anime/` walks 78 pages, the
+     *   4K-UHD landing 1020). Only the active marker carries `data-page`
+     *   here, so the marker arithmetic alone would read last == active and
+     *   stop the walk after page one — the exact defect this reader guards
+     *   against.
+     *
+     * A page without the bar (zero results) or without an active marker
+     * reads as "nothing more" — the honest stop.
      */
     fun parseSearchNextPage(html: String): Int? {
         val bar = PAGES_BAR.find(html)?.groupValues?.get(1) ?: return null
-        val current =
-            ACTIVE_PAGE
-                .find(bar)
-                ?.value
-                ?.let { active -> DATA_PAGE.find(active)?.groupValues?.get(1) }
+        val landingNext =
+            ANY_ANCHOR
+                .findAll(bar)
+                .firstOrNull { anchor -> attributes(anchor.value)["class"].orEmpty().contains("ctrl-right") }
+                ?.let { anchor -> attributes(anchor.value)["href"].orEmpty() }
+                ?.let { href -> PAGE_IN_QUERY.find(unescapeEntities(href))?.groupValues?.get(1) }
                 ?.toIntOrNull()
-                ?: return null
+        if (landingNext != null) return landingNext
+        val current = activePageIn(bar) ?: return null
         val last =
             DATA_PAGE
                 .findAll(bar)
@@ -239,6 +267,49 @@ internal object Wallpapers4KParser {
                 ?: return null
         return if (current < last) current + 1 else null
     }
+
+    /**
+     * The page the bar itself says is being served — the landing-redirect
+     * detector. The site drops the `?page=` parameter when it bounces a deep
+     * `/search/{query}?page=N` request back to a landing's FIRST page, so a
+     * served page that disagrees with the page asked for is the redirect's
+     * own signature (verified live: `/search/anime?page=2` answers the
+     * content of `/anime/`, active marker and all).
+     */
+    fun parseActivePage(html: String): Int? {
+        val bar = PAGES_BAR.find(html)?.groupValues?.get(1) ?: return null
+        return activePageIn(bar)
+    }
+
+    /** The `active` strong's own page number, shared by both bar flavors. */
+    private fun activePageIn(bar: String): Int? =
+        ACTIVE_PAGE
+            .find(bar)
+            ?.value
+            ?.let { active -> DATA_PAGE.find(active)?.groupValues?.get(1) }
+            ?.toIntOrNull()
+
+    /**
+     * The landing flavor's walk base: the canonical URL a landing page
+     * discloses, query stripped, on this site only — the search flavor
+     * serves no canonical at all (verified live), so a null here IS the
+     * flavor test. A foreign or malformed canonical is answered with null
+     * rather than walked.
+     */
+    fun parseCanonicalBase(html: String): String? =
+        CANONICAL
+            .find(html)
+            ?.let { canonical -> attributes(canonical.value)["href"] }
+            ?.substringBefore('?')
+            ?.let(::siteUrl)
+
+    /** Only this site's own absolute or site-relative URLs, else null. */
+    private fun siteUrl(url: String): String? =
+        when {
+            url.startsWith("$BASE_URL/") -> url
+            url.startsWith("/") -> BASE_URL + url
+            else -> null
+        }
 
     /**
      * The definitive record of a wallpaper page: the `Download Original`

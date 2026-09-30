@@ -186,6 +186,44 @@ class Wallpapers4KLiveCheckTest {
         }
 
     @Test
+    fun `a landing query walks its own deep grid`() =
+        runTest {
+            assumeTrue(live())
+            val configured = configured()
+            // `anime` 301s to the site's own /anime/ landing — 78 pages of
+            // grid behind a REAL anchor pager the marker-only reader mistook
+            // for a last page (the 1.1.0 defect: one page, then silence).
+            val page1 = configured.search(query = "anime", page = 1).getOrThrow()
+
+            assertTrue("expected a real batch, got ${page1.wallpapers.size}", page1.wallpapers.size >= 10)
+            assertTrue("the site's anime landing walks 78 pages - page one must offer more", page1.nextPage != null)
+
+            val page2 = configured.search(query = "anime", page = 2).getOrThrow()
+            val ids1 = page1.wallpapers.map { it.id }.toSet()
+            assertTrue("expected fresh items on the landing's page two", page2.wallpapers.none { it.id in ids1 })
+            assertTrue("expected the landing walk to continue past page two", page2.nextPage != null)
+        }
+
+    @Test
+    fun `a phrase the site answers with nothing rides its richest word`() =
+        runTest {
+            assumeTrue(live())
+            val configured = configured()
+            // The site's search is phrase-exact: `4k wallpapers` serves zero
+            // server-rendered cells (a browser sees client-side Google
+            // results) — the word tier rescues the phrase onto `4k`'s own
+            // 1020-page stream.
+            val page1 = configured.search(query = "4k wallpapers", page = 1).getOrThrow()
+
+            assertTrue("expected the word tier to rescue the phrase, got ${page1.wallpapers.size}", page1.wallpapers.size >= 10)
+            assertTrue("expected the rescued stream to paginate", page1.nextPage != null)
+
+            val page2 = configured.search(query = "4k wallpapers", page = 2).getOrThrow()
+            val ids1 = page1.wallpapers.map { it.id }.toSet()
+            assertTrue("expected fresh items on the rescued stream's page two", page2.wallpapers.none { it.id in ids1 })
+        }
+
+    @Test
     fun `details reads the definitive live record`() =
         runTest {
             assumeTrue(live())
