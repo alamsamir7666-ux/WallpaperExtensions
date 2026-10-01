@@ -4,7 +4,7 @@ Extension repository for the [Cloudimage](https://github.com/alamsamir7666-ux/Cl
 Android app — installable wallpaper-source packages, published to this repo's
 `gh-pages` branch.
 
-The repository ships five keyless scrapers, all modeled on the two-layer
+The repository ships six keyless scrapers, all modeled on the two-layer
 Provider/Extractor pattern used by CloudStream plugins: the star,
 **`cloudimage.wallpapercave`**, its sharp-eyed sibling
 **`cloudimage.hdqwalls`** — HD, 4K, 5K and 8K wallpapers from hdqwalls.com,
@@ -19,12 +19,17 @@ nothing — **`cloudimage.alphacoders`** —
 Wallpaper Abyss at alphacoders.com, the deepest library of the set,
 whose listings disclose the original file itself, right in the grid,
 and whose real search endpoint delivers exactly what its own website
-shows — and **`cloudimage.wallpapersafari`** — the gallery-first library
+shows — **`cloudimage.wallpapersafari`** — the gallery-first library
 at wallpapersafari.com, whose topic galleries serve their complete
 walls server-rendered, whose cards disclose the original, the uploader
 and the file's TRUE dimensions in one grid cell, and whose search is
 the site's own, read through the same two-step its album-first model
-demands.
+demands — and **`cloudimage.wallpaperaccess`** — the album-organized
+library at wallpaperaccess.com, the set's first album-style source:
+28 emoji-badged categories, complete album directories and complete
+album walls, all server-rendered with no pagination anywhere, feeding
+the app's album paradigm (v1.1.0) — its Realme-style category sidebar,
+its single Home tab of newest albums, and its album-answer search.
 
 ## Install in the app
 
@@ -36,7 +41,7 @@ demands.
    verifies every package's SHA-256 on download, and installs it as a
    runtime-loaded provider.
 4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*,
-   *Alpha Coders*, *WallpaperSafari*, or any mix. No API key, no
+   *Alpha Coders*, *WallpaperSafari*, *WallpaperAccess*, or any mix. No API key, no
    account — each reads its site the way the site's own browser UI does.
 
 ## Packages
@@ -48,6 +53,35 @@ demands.
 | `cloudimage.wallpapers4k` | 1.2.0 | 21 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.alphacoders` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapersafari` | 1.0.1 | 26 KB | popular, search, filters, tags | Keyless scraper, SFW, API v1 |
+| `cloudimage.wallpaperaccess` | 1.0.1 | 20 KB | popular, search, tags, albums | Keyless scraper, SFW, API v1 — the album paradigm's first source |
+
+### WallpaperAccess 1.0.1 — the album paradigm's first source
+
+The set's first **album-style** source, built for the app's v1.1.0 album
+paradigm: pin it as your browse source and the home screen becomes the
+site's own — a single **Home** tab of newest albums and a Realme-style
+category sidebar floating off the right edge (tap the handle, pick a
+category, drill into albums, into walls, into the viewer; back walks the
+stack). Search answers albums the way the site's own search does.
+
+- **28 categories, emoji-first**: the site ships an emoji per category
+  (🌀 Abstract, 🐶 Animals, 🎮 Games …) and so does the sidebar — a baked
+  copy answers offline, refreshed from the navigation menu every page
+  carries.
+- **Complete everything**: a category page serves its whole album
+  directory (150 cards for anime), an album page its whole wall
+  (verified 70/70 and 99/99 live), and search its every matching album —
+  one fetch per screen, the politeness floor for a Cloudflare-fronted
+  site.
+- **True dimensions, extension-safe thumbs**: every item carries its real
+  `WxH`, and thumbs keep the original's file extension — the thumb
+  endpoint answers 415 for a mismatched one.
+- **Honest empties**: the search page's "Sorry, no wallpapers found"
+  apology is read, so the trending cards behind it are never served as
+  answers.
+- **Flat-feed compatibility**: older hosts and the merged all-sources
+  feed see the same streams flattened — popular walks the newest albums,
+  search walks the matching ones, three albums per page.
 
 ### 1.2.0 — a full shelf of browse tabs
 

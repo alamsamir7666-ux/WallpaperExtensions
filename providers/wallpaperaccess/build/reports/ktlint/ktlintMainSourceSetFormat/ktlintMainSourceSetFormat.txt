@@ -1,0 +1,4 @@
+[90m/home/z/my-project/repo-cloudwallpaper/providers/wallpaperaccess/src/main/kotlin/com/cloudimage/wallpaperaccess/[0mWallpaperAccessWallpaperProvider.kt[90m:[0m414[90m:52:[0m First line of body expression fits on same line as function signature [90m(standard:function-signature)[0m
+
+Summary error count (descending) by rule:
+  standard:function-signature: 1
