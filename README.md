@@ -4,7 +4,7 @@ Extension repository for the [Cloudimage](https://github.com/alamsamir7666-ux/Cl
 Android app — installable wallpaper-source packages, published to this repo's
 `gh-pages` branch.
 
-The repository ships six keyless scrapers, all modeled on the two-layer
+The repository ships seven keyless scrapers, all modeled on the two-layer
 Provider/Extractor pattern used by CloudStream plugins: the star,
 **`cloudimage.wallpapercave`**, its sharp-eyed sibling
 **`cloudimage.hdqwalls`** — HD, 4K, 5K and 8K wallpapers from hdqwalls.com,
@@ -24,12 +24,17 @@ at wallpapersafari.com, whose topic galleries serve their complete
 walls server-rendered, whose cards disclose the original, the uploader
 and the file's TRUE dimensions in one grid cell, and whose search is
 the site's own, read through the same two-step its album-first model
-demands — and **`cloudimage.wallpaperaccess`** — the album-organized
+demands — **`cloudimage.wallpaperaccess`** — the album-organized
 library at wallpaperaccess.com, the set's first album-style source:
 28 emoji-badged categories, complete album directories and complete
 album walls, all server-rendered with no pagination anywhere, feeding
 the app's album paradigm (v1.1.0) — its Realme-style category sidebar,
-its single Home tab of newest albums, and its album-answer search.
+its single Home tab of newest albums, and its album-answer search —
+and **`cloudimage.hdwallpapers`** — the long-tail library at
+hdwallpapers.in, whose every feed is the same uniform twenty-cell
+grid five thousand pages deep, whose grid cells disclose working
+original downloads deterministically, and whose detail pages carry
+the file's TRUE dimensions in their own resolution lists.
 
 ## Install in the app
 
@@ -41,7 +46,8 @@ its single Home tab of newest albums, and its album-answer search.
    verifies every package's SHA-256 on download, and installs it as a
    runtime-loaded provider.
 4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*,
-   *Alpha Coders*, *WallpaperSafari*, *WallpaperAccess*, or any mix. No API key, no
+   *Alpha Coders*, *WallpaperSafari*, *WallpaperAccess*, *HD Wallpapers*,
+   or any mix. No API key, no
    account — each reads its site the way the site's own browser UI does.
 
 ## Packages
@@ -54,6 +60,7 @@ its single Home tab of newest albums, and its album-answer search.
 | `cloudimage.alphacoders` | 1.1.0 | 18 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpapersafari` | 1.0.1 | 26 KB | popular, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpaperaccess` | 1.0.1 | 20 KB | popular, search, tags, albums | Keyless scraper, SFW, API v1 — the album paradigm's first source |
+| `cloudimage.hdwallpapers` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 — originals in the grid |
 
 ### WallpaperAccess 1.0.1 — the album paradigm's first source
 
@@ -155,6 +162,8 @@ providers/hdqwalls/          the second extension, same layout (36 tests)
 providers/wallpapers4k/      the third extension, same layout (42 tests)
 providers/alphacoders/       the fourth extension, same layout (29 tests)
 providers/wallpapersafari/   the fifth extension, same layout (26 tests)
+providers/wallpaperaccess/   the sixth extension, the album paradigm's first source
+providers/hdwallpapers/      the seventh extension, same layout (20 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -562,6 +571,93 @@ page (~700 source lines plus 590 lines of tests):
   serving its own distinct feed, definitive details, and the
   disclosed original really serving — all green against the live site.
 
+## The HD Wallpapers extension
+
+The seventh scraper, built for a site that is *listing-first* and
+wears it with pride — every feed the same shape, the deepest streams in
+the set (~750 source lines plus 790 lines of tests):
+
+- **One grid, every feed, five thousand pages deep.** Latest
+  (`/latest_wallpapers.html` — 5,681 pages at capture time), most
+  downloaded (`/top_download_wallpapers.html`), most viewed
+  (`/top_view_wallpapers.html`), all twenty-five categories
+  (`/{slug}-desktop-wallpapers.html`), every tag
+  (`/tag/{name}.html`) and search (`/search.html?q=`) serve the same
+  twenty-cell `li.wall` grid, paginated by the site's own bar whose
+  `Next` link is the "more exists" signal and whose absence is the
+  stop. A page request past the end of any stream answers with the
+  site's own apology — "Sorry, no wallpapers found" — above a trending
+  collection, and the marker is read so those cards are never served
+  as results.
+- **Category pages carry two bars; only the grid's is read.** A
+  category page serves a sub-category directory above its grid
+  (`Alfa Romeo (23)`, `Aston Martin (116)` …) that paginates under
+  `pageSub/`, while the wallpaper grid's own bar keeps `page/` — the
+  provider reads only the bar whose links walk `page/`, so the
+  sub-directory's continuation never leaks into the stream's.
+- **Originals in the grid, deterministically.** Every cell discloses
+  its wallpaper's page slug, and the original itself is a string
+  template away: `/download/{slug}-HD.jpg` — the exact URL the page's
+  own Original button carries (verified live, wallpapers of every
+  vintage). Like WallpaperCave's `/wp/{id}.*` directories, the
+  "extractor layer" needs no fetching: grid items hold working
+  download URLs before details are ever fetched. Thumbs are the
+  site's own 2x copies (`-t2.jpg`, the `srcset` retina source and the
+  very file the wallpaper pages display) — crisp on Android's dense
+  screens at thumbnail price.
+- **TRUE dimensions from the page's own list.** A wallpaper page
+  publishes its generated resolution variants
+  (`1280x720 … 7680x4320`) beside the original link, and the LARGEST
+  entry carries the file's true dimensions — verified live, three for
+  three, the `-HD` original and the top variant sharing pixels
+  (2560x1440, 7680x4320, 1920x1080). `details` reads that entry; the
+  grid's own `width="246" height="154"` attributes are the uniform
+  card crop, true of no wallpaper, and are deliberately not published.
+- **The site's real search, no fallback theater.** `/search.html?q=`
+  is a database query over titles and tags — multi-word queries
+  included (verified live) — paginated as deep as its own answers go
+  (leopard: 7 pages; nature: 526; abstract: 308). A miss is a miss the
+  site itself reports with its apology, and it is honored as an
+  honest empty page.
+- **Fifteen shelves.** Popular and Latest ride the host's `sorting`
+  vocabulary (most-viewed and latest); Anime rides its `category`
+  value onto the site's own anime category page (the one category the
+  homepage nav does not list); twelve tag-style `query` presets —
+  Cars, Nature, Games, Movies, Abstract, Animals, Fantasy, Space,
+  Sports, Bikes, Flowers, Cute — ride the site's search, which those
+  terms address precisely (verified live, each stream paginating).
+  `toplist` sorting walks the most-downloaded ranking, and
+  `sorting=random` serves one random batch of the latest feed: the
+  site's own random endpoint sits behind a Cloudflare wall that
+  answers 403 to every non-browser agent (verified live, browser
+  headers included), so RANDOM is deliberately not declared and none
+  of it is faked.
+- **Politeness.** The site's robots.txt is the old search-engine
+  allowlist — everything disallowed to the generic `*` agent while
+  Googlebot, Slurp, msnbot and Mediapartners are explicitly invited —
+  a pattern from the CDN-bot era, not a statement about user-driven
+  clients. Access is the disclosed, bounded exception the repository
+  already documents for robots-restricted paths: every fetch on an
+  explicit user action, one page per request, sequential, capped a
+  hundred pages deep — byte-identical to a user browsing the same
+  screens, never crawling or enumerating. The Cloudflare-walled random
+  page is left to the browsers it serves; the sitemap and RSS are
+  never touched.
+- **Verified.** 20 unit tests from real captured markup (the shared
+  grid with its duplicate cells and blank-alt fallbacks, the
+  continuing and ending pagination bars, the dual-bar category page
+  whose sub-category bar must never leak, the apology page whose
+  trending cards must never serve, the search's own URL shapes and
+  multi-word encoding, the vocabulary routing — category, toplist,
+  date, random and the honest people fallback — the deep cap, the
+  definitive detail record with true dimensions and SEO-filtered
+  tags, the wrong-slug rejection, and the deterministic originals in
+  every grid cell) plus a gated `HdWallpapersLiveCheckTest`
+  (`HDWALLPAPERS_LIVE=1`): the latest feed, both ranked feeds, the
+  anime category, search and its zero-result apology, search page
+  two, and details with the true resolution — all green against the
+  live site.
+
 ## Publishing (CI)
 
 On every push to `main` that touches `providers/**`, `tools/**`, or the
@@ -606,6 +702,8 @@ done
 # → providers/alphacoders/build/outputs/extension/cloudimage.alphacoders.zip
 ./gradlew :providers:wallpapersafari:check :providers:wallpapersafari:packageExtension
 # → providers/wallpapersafari/build/outputs/extension/cloudimage.wallpapersafari.zip
+./gradlew :providers:hdwallpapers:check :providers:hdwallpapers:packageExtension
+# → providers/hdwallpapers/build/outputs/extension/cloudimage.hdwallpapers.zip
 ```
 
 ## Adding another extension
