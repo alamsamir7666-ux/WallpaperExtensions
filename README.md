@@ -4,7 +4,7 @@ Extension repository for the [Cloudimage](https://github.com/alamsamir7666-ux/Cl
 Android app — installable wallpaper-source packages, published to this repo's
 `gh-pages` branch.
 
-The repository ships seven keyless scrapers, all modeled on the two-layer
+The repository ships eight keyless scrapers, all modeled on the two-layer
 Provider/Extractor pattern used by CloudStream plugins: the star,
 **`cloudimage.wallpapercave`**, its sharp-eyed sibling
 **`cloudimage.hdqwalls`** — HD, 4K, 5K and 8K wallpapers from hdqwalls.com,
@@ -34,7 +34,12 @@ and **`cloudimage.hdwallpapers`** — the long-tail library at
 hdwallpapers.in, whose every feed is the same uniform twenty-cell
 grid five thousand pages deep, whose grid cells disclose working
 original downloads deterministically, and whose detail pages carry
-the file's TRUE dimensions in their own resolution lists.
+the file's TRUE dimensions in their own resolution lists — and
+**`cloudimage.mordeo`** — the portrait-phone library at mordeo.org, a
+WordPress masonry of 4K Ultra HD mobile wallpapers (2160x3840
+originals, the axis every desktop-first source in this set lacks),
+whose card filenames derive the original deterministically across all
+four eras of the site's decade-deep archive.
 
 ## Install in the app
 
@@ -47,7 +52,7 @@ the file's TRUE dimensions in their own resolution lists.
    runtime-loaded provider.
 4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*,
    *Alpha Coders*, *WallpaperSafari*, *WallpaperAccess*, *HD Wallpapers*,
-   or any mix. No API key, no
+   *Mordeo*, or any mix. No API key, no
    account — each reads its site the way the site's own browser UI does.
 
 ## Packages
@@ -61,6 +66,7 @@ the file's TRUE dimensions in their own resolution lists.
 | `cloudimage.wallpapersafari` | 1.0.1 | 26 KB | popular, search, filters, tags | Keyless scraper, SFW, API v1 |
 | `cloudimage.wallpaperaccess` | 1.0.1 | 20 KB | popular, search, tags, albums | Keyless scraper, SFW, API v1 — the album paradigm's first source |
 | `cloudimage.hdwallpapers` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 — originals in the grid |
+| `cloudimage.mordeo` | 1.0.0 | 19 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 — portrait 4K originals, deterministic across four eras |
 
 ### WallpaperAccess 1.0.1 — the album paradigm's first source
 
@@ -164,6 +170,7 @@ providers/alphacoders/       the fourth extension, same layout (29 tests)
 providers/wallpapersafari/   the fifth extension, same layout (26 tests)
 providers/wallpaperaccess/   the sixth extension, the album paradigm's first source
 providers/hdwallpapers/      the seventh extension, same layout (20 tests)
+providers/mordeo/            the eighth extension, same layout (23 tests)
 tools/build_repo_index.py    writes index.json from a directory of zips
 .github/workflows/publish.yml  test → package → publish (gh-pages)
 ```
@@ -658,6 +665,62 @@ the set (~750 source lines plus 790 lines of tests):
   two, and details with the true resolution — all green against the
   live site.
 
+## The Mordeo extension
+
+The eighth scraper, and the set's first portrait-first source —
+mordeo.org is a WordPress blog of phone wallpapers, 4K Ultra HD
+2160x3840 originals in the 9:16.5 aspect every desktop-first source in
+this set lacks (~840 source lines plus 820 lines of tests):
+
+- **One masonry, every listing.** The home stream (`/`, 1,144 pages
+  deep at capture time), all twenty-three categories
+  (`/wallpapers/category/{slug}/`), every WordPress tag
+  (`/wallpapers/tag/{slug}/`) and search (`/?s=`, then `/page/N/?s=`)
+  serve the same six-cell masonry — an `li` carrying the wallpaper's
+  own taxonomy in its class list, its card image with a `srcset` of
+  larger copies, and its clean `h2` title. The theme's wp-pagenavi
+  `nextpostslink` is the "more exists" signal; a search the blog
+  cannot answer simply ships the list empty — zero parsed cells is
+  the honest answer, never the sidebar's suggestions.
+- **Originals derivable across four eras.** Every file the site has
+  uploaded since 2016 lands at `/files/uploads/{year}/{month}/{name}.jpg`,
+  and the card images are that name plus a size suffix — `-{WxH}` on
+  three eras (`.webp` since 2023, `.jpg` before), `-Preview` on the
+  earliest hand-made previews. Stripping the suffix and speaking
+  `.jpg` answers the original deterministically — verified live,
+  seven for seven across the eras, byte-identical to the download
+  links the wallpaper pages carry. The middle era's pages ship a
+  `/download/{postId}/` endpoint that serves the same bytes as an
+  octet-stream; the provider prefers the static original.
+- **The taxonomy rides the cards.** Grid-item tags are the site's own
+  WordPress tags, read straight off each card's `li` class list and
+  prettified from slugs — no title-word heuristics. Detail tags are
+  the page's own tag row; entities (`&#8217;`, `&#8211;` …) decode.
+- **A single chronological feed, honestly.** The site publishes no
+  ranking, so POPULAR and LATEST are the same water — the stream —
+  the same single-stream answer WallpaperSafari documents. The host
+  vocabulary's `anime` and `people` walk the site's own category
+  pages natively; `sorting=random` serves one random page of the
+  stream.
+- **TRUE dimensions from the prose.** Grid items carry none (the
+  card markup's `width`/`height` are the uniform 283x503 crop, true
+  of no wallpaper); `details` reads the page's own resolution
+  sentence — "With 2160x3840 pixels" — and the canonical link
+  cross-checks the slug the site itself answers.
+- **Thumbs at the site's own 2x.** Cards pick the smallest `srcset`
+  entry at least as wide as twice the card (576-768px, capped at
+  1024) so dense screens render crisp at thumbnail price; the
+  earliest era's previews, which ship nothing larger, serve
+  themselves.
+- **Tests pin all four eras.** 23 unit tests over a scripted fake
+  client with fixtures cut from live markup (every card era, the
+  entity decodings, the pagenavi shapes, the empty search page, all
+  three detail-page eras, the canonical rejection) plus a gated
+  `MordeoLiveCheckTest` (`MORDEO_LIVE=1`): the stream, the deep
+  old-era pages, both category pages, search hit and miss, the
+  derived originals (HEAD-verified `image/*` 200s) and details with
+  the true resolution — all green against the live site.
+
 ## Publishing (CI)
 
 On every push to `main` that touches `providers/**`, `tools/**`, or the
@@ -704,6 +767,8 @@ done
 # → providers/wallpapersafari/build/outputs/extension/cloudimage.wallpapersafari.zip
 ./gradlew :providers:hdwallpapers:check :providers:hdwallpapers:packageExtension
 # → providers/hdwallpapers/build/outputs/extension/cloudimage.hdwallpapers.zip
+./gradlew :providers:mordeo:check :providers:mordeo:packageExtension
+# → providers/mordeo/build/outputs/extension/cloudimage.mordeo.zip
 ```
 
 ## Adding another extension
