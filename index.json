@@ -1,0 +1,93 @@
+{
+  "name": "WallpaperExtensions",
+  "packages": [
+    {
+      "id": "cloudimage.alphacoders",
+      "fileName": "cloudimage.alphacoders.zip",
+      "sha256": "1b529888c2a78a9741ebb677a5dac937460adf080c123166729f94e0826ca0e8",
+      "sizeBytes": 18587,
+      "versionName": "1.1.0",
+      "versionCode": 3,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "HD, 4K and 8K wallpapers from Wallpaper Abyss at alphacoders.com - scraped, keyless."
+    },
+    {
+      "id": "cloudimage.hdqwalls",
+      "fileName": "cloudimage.hdqwalls.zip",
+      "sha256": "68bbec9b674b072e9adc2095823938d78a4f81f6d5a2a8a51e260b03987d810a",
+      "sizeBytes": 30519,
+      "versionName": "1.0.4",
+      "versionCode": 5,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "HD, 4K, 5K and 8K wallpapers from hdqwalls.com - scraped, keyless."
+    },
+    {
+      "id": "cloudimage.hdwallpapers",
+      "fileName": "cloudimage.hdwallpapers.zip",
+      "sha256": "fb9f04c0eafdefaf16dd9c590e2b15a7bbae4cbf5a584fa2e97c2b757c2a8cf3",
+      "sizeBytes": 17435,
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "HD, 4K, 5K and 8K wallpapers from hdwallpapers.in - listings, search and originals in the grid, keyless."
+    },
+    {
+      "id": "cloudimage.mordeo",
+      "fileName": "cloudimage.mordeo.zip",
+      "sha256": "9e9775cbf28657fb76c53bb3e22175601ff2f00e212e3d58f9be2e9c424df075",
+      "sizeBytes": 19368,
+      "versionName": "1.0.0",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "4K Ultra HD mobile wallpapers from mordeo.org - portrait originals for phones, listings, search and tags, keyless."
+    },
+    {
+      "id": "cloudimage.wallpaperaccess",
+      "fileName": "cloudimage.wallpaperaccess.zip",
+      "sha256": "6d85c9b0a9e8331484460d48fc4ef762133b8dcdb1221ac99b9bf2b62cba82ce",
+      "sizeBytes": 20224,
+      "versionName": "1.0.1",
+      "versionCode": 1,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Album-organized wallpapers from wallpaperaccess.com - categories, albums and complete walls, scraped keyless."
+    },
+    {
+      "id": "cloudimage.wallpapercave",
+      "fileName": "cloudimage.wallpapercave.zip",
+      "sha256": "d989c55bdb6187dbe58baac3bca8fbfd4943c6d9597321acb3201e549be2aa3e",
+      "sizeBytes": 25494,
+      "versionName": "1.2.0",
+      "versionCode": 3,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Wallpapers from wallpapercave.com - scraped, keyless."
+    },
+    {
+      "id": "cloudimage.wallpapers4k",
+      "fileName": "cloudimage.wallpapers4k.zip",
+      "sha256": "f731293102b92c68c23430a471981062e9df4ac8348dad84496a2764d6cc9235",
+      "sizeBytes": 21851,
+      "versionName": "1.2.0",
+      "versionCode": 3,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "4K, 5K, 8K and up wallpapers from 4kwallpapers.com - scraped, keyless."
+    },
+    {
+      "id": "cloudimage.wallpapersafari",
+      "fileName": "cloudimage.wallpapersafari.zip",
+      "sha256": "1e3b869117c36e17ba0607ad9ddf14623eba8bc6f5e244a2f6fb3d5bcee11cff",
+      "sizeBytes": 26435,
+      "versionName": "1.0.1",
+      "versionCode": 2,
+      "apiVersion": 1,
+      "author": "Cloudimage",
+      "description": "Desktop and phone wallpapers from wallpapersafari.com - scraped, keyless."
+    }
+  ]
+}
