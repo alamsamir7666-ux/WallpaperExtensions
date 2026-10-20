@@ -4,7 +4,7 @@ Extension repository for the [Cloudimage](https://github.com/alamsamir7666-ux/Cl
 Android app — installable wallpaper-source packages, published to this repo's
 `gh-pages` branch.
 
-The repository ships eight keyless scrapers, all modeled on the two-layer
+The repository ships nine keyless scrapers, all modeled on the two-layer
 Provider/Extractor pattern used by CloudStream plugins: the star,
 **`cloudimage.wallpapercave`**, its sharp-eyed sibling
 **`cloudimage.hdqwalls`** — HD, 4K, 5K and 8K wallpapers from hdqwalls.com,
@@ -39,7 +39,19 @@ the file's TRUE dimensions in their own resolution lists — and
 WordPress masonry of 4K Ultra HD mobile wallpapers (2160x3840
 originals, the axis every desktop-first source in this set lacks),
 whose card filenames derive the original deterministically across all
-four eras of the site's decade-deep archive.
+four eras of the site's decade-deep archive — and
+**`cloudimage.behance`** — the creative-portfolio giant at behance.net,
+read keylessly through the Varnish edge's JavaScript-cookie challenge
+dance (a 403 hand-off answered by presenting the fresh cookie, a handful
+of quick reloads inside a fixed budget), whose search walls ship as
+server-rendered application/json state — twenty-four-card cursor pages
+speaking the site's own sort grammar (`appreciations` and
+`published_date`, each with its `time=all` companion) — whose cards
+disclose working cover originals right in the grid, and whose project
+pages carry the uploaded `source` renditions with TRUE dimensions per
+image module, feeding both the flat feed and the album paradigm (the
+set's second album-style source: curated category terms as the sidebar,
+projects as albums, image modules as walls).
 
 ## Install in the app
 
@@ -52,7 +64,7 @@ four eras of the site's decade-deep archive.
    runtime-loaded provider.
 4. **Install** → *WallpaperCave*, *HDQWalls*, *4K Wallpapers*,
    *Alpha Coders*, *WallpaperSafari*, *WallpaperAccess*, *HD Wallpapers*,
-   *Mordeo*, or any mix. No API key, no
+   *Mordeo*, *Behance*, or any mix. No API key, no
    account — each reads its site the way the site's own browser UI does.
 
 ## Packages
@@ -67,6 +79,7 @@ four eras of the site's decade-deep archive.
 | `cloudimage.wallpaperaccess` | 1.0.1 | 20 KB | popular, search, tags, albums | Keyless scraper, SFW, API v1 — the album paradigm's first source |
 | `cloudimage.hdwallpapers` | 1.0.0 | 17 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 — originals in the grid |
 | `cloudimage.mordeo` | 1.0.0 | 19 KB | popular, latest, search, filters, tags | Keyless scraper, SFW, API v1 — portrait 4K originals, deterministic across four eras |
+| `cloudimage.behance` | 1.0.0 | 24 KB | popular, latest, search, filters, tags, albums | Keyless scraper, SFW, API v1 — the album paradigm's second source, through the edge's JS-cookie challenge |
 
 ### WallpaperAccess 1.0.1 — the album paradigm's first source
 
@@ -721,6 +734,66 @@ this set lacks (~840 source lines plus 820 lines of tests):
   derived originals (HEAD-verified `image/*` 200s) and details with
   the true resolution — all green against the live site.
 
+## The Behance extension
+
+The ninth scraper, and the set's second album-style source —
+behance.net is the world's largest creative-portfolio site, a library
+of designer-made wallpaper projects read keylessly through its own
+Varnish edge (~600 source lines plus 900 lines of tests):
+
+- **The challenge dance.** The edge serves non-browser clients a 403
+  whose only script sets a `js_challenge_value` cookie and reloads;
+  the provider performs the reload by hand — read the fresh value out
+  of each refusal, present it on the immediate retry, inside a
+  twelve-attempt budget (every live page has cleared somewhere between
+  one and twelve; the fake client replays the same hand-offs). It is
+  not a Cloudflare challenge — no cf-mitigated header, `server:
+  Varnish` — so the host's bypass machinery correctly stays out of it.
+- **Search walls as SSR state.** `/search?search={term}` embeds its
+  24 project cards in the page's largest application/json block (the
+  Ember app's own preload), each card disclosing its cover in every
+  rendition the site generates — 404-wide webp grid thumbs and the
+  `original_webp` cover, a working wallpaper-grade URL straight off
+  the grid. Pickers key renditions by their URL segment
+  (`404_webp`, `original_webp`, `source`, `disp` …), never by list
+  order, which the site varies page to page.
+- **The site's own grammar, live-verified.** `&sort=appreciations&
+  time=all` is the all-time most-appreciated water (the pair travels
+  together; `sort` without `time` is ignored), `sort=published_date`
+  is newest first, and `&after={cursor}` pages the wall — base64 of
+  the ordinal the next page starts at (`MjQ=` = 24, `NDg=` = 48), so
+  page N's cursor is computable statelessly, the same page arithmetic
+  as the other scrapers' `/page/N` URLs. A query the site cannot
+  answer embeds an empty nodes array — the honest empty page.
+- **Albums are projects.** A Behance project IS a titled collection of
+  wallpapers: the album paradigm maps the site natively — a baked
+  shelf of curated terms (Abstract, Gradient, Space, Anime, Sci-Fi …)
+  as the category sidebar, projects as albums (cover, owner, title),
+  and the project page's image modules as the walls, text and embed
+  modules filtered out. The flat feed keeps the same cards as
+  wallpapers via their cover originals.
+- **The source rendition is the wallpaper.** Project pages embed the
+  `source` rendition — the uploaded original, often 3840 wide — and
+  the module's own dimensions: the rendition discloses the original's
+  width, the module carries the display copy's true aspect, and the
+  pair composes the true resolution (2160x2160, 4500x3000) from the
+  site's own numbers, never an invented pair. Module-scoped ids
+  (`{projectId}-{moduleId}`) pin the exact image the user tapped.
+- **Tags from the site's own rail.** Every search state ships
+  Behance's own tag suggestions ("wallpaper design", "wallpaper
+  background"), harvested from fetched pages into a small per-term
+  cache; project tags arrive trimmed of the site's trailing-space
+  sloppiness.
+- **Tests pin the shapes.** 25 unit tests over a scripted fake client
+  whose routes replay the edge's cookie hand-offs (stubborn rounds,
+  never-clearing edges, unrecognized 403s, 500s) with fixtures cut
+  from live state (three real cards with real rendition URLs, the
+  four-module-plus-text project, the cover-only project, the empty
+  wall, the cursor arithmetic) plus a gated `BehanceLiveCheckTest`
+  (`BEHANCE_LIVE=1`): the featured wall, cursor page two, both sorted
+  waters, search and suggestions, details with source renditions and
+  the album walk — all green against the live site.
+
 ## Publishing (CI)
 
 On every push to `main` that touches `providers/**`, `tools/**`, or the
@@ -769,6 +842,8 @@ done
 # → providers/hdwallpapers/build/outputs/extension/cloudimage.hdwallpapers.zip
 ./gradlew :providers:mordeo:check :providers:mordeo:packageExtension
 # → providers/mordeo/build/outputs/extension/cloudimage.mordeo.zip
+./gradlew :providers:behance:check :providers:behance:packageExtension
+# → providers/behance/build/outputs/extension/cloudimage.behance.zip
 ```
 
 ## Adding another extension
