@@ -1,0 +1,10 @@
+{
+  "id": "cloudimage.zedge",
+  "name": "Zedge",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "author": "Cloudimage",
+  "description": "Free HD phone wallpapers from zedge.net - the flat directory of single wallpapers: popular grid, categories, tags and search, keyless.",
+  "apiVersion": 1,
+  "entryClass": "com.cloudimage.zedge.ZedgeWallpaperProvider"
+}
