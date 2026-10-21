@@ -9,102 +9,16 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Dump the search page listing structure + walk the parser's exact chain
+      - name: Isolate cursor-vs-keyword behavior of the POST continuation lane
         run: |
           set +e
-          cat > /tmp/struct.py <<'PY'
-          import json, re, sys, urllib.request
+          cat > /tmp/zprobe9.py <<'PY'
+          import json, re, sys
+          import urllib.request
+          import urllib.parse
+
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
           BASE = "https://www.zedge.net"
-
-          def http_get(url):
-              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
-              with urllib.request.urlopen(req, timeout=60) as r:
-                  return r.status, r.read().decode("utf-8", "replace")
-
-          def flight_stream(html):
-              out = []
-              for m in re.finditer(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.S):
-                  try:
-                      out.append(json.loads('"' + m.group(1) + '"'))
-                  except Exception:
-                      pass
-              return "".join(out)
-
-          def balanced_end(text, start):
-              depth, in_string, escaped = 0, False, False
-              for i in range(start, len(text)):
-                  c = text[i]
-                  if in_string:
-                      if escaped: escaped = False
-                      elif c == '\\': escaped = True
-                      elif c == '"': in_string = False
-                  else:
-                      if c == '"': in_string = True
-                      elif c in '{[': depth += 1
-                      elif c in '}]':
-                          depth -= 1
-                          if depth == 0: return i
-              return None
-
-          def values_of(flight, key):
-              """The parser's exact scanner: every { or [ right after "key":."""
-              vals, needle, frm = [], '"' + key + '":', 0
-              while True:
-                  at = flight.find(needle, frm)
-                  if at < 0: break
-                  frm = at + len(needle)
-                  start = frm
-                  while start < len(flight) and flight[start].isspace(): start += 1
-                  if start >= len(flight): break
-                  if flight[start] not in '{[': continue
-                  end = balanced_end(flight, start)
-                  if end is None: continue
-                  try: vals.append(json.loads(flight[start:end+1]))
-                  except Exception: pass
-              return vals
-
-          query = "neha sharma"
-          path = "/find/wallpapers/" + urllib.request.quote(query)
-          print("[structure]", path)
-          status, html = http_get(BASE + path)
-          print("  http", status, "bytes", len(html))
-          flight = flight_stream(html)
-
-          initials = [v for v in values_of(flight, "initialData") if isinstance(v, dict) and "pages" in v]
-          print("  initialData-with-pages count:", len(initials))
-          for n, listing in enumerate(initials):
-              pages = listing.get("pages") or []
-              items = []
-              for p in pages:
-                  items += [it for it in (p.get("items") or []) if isinstance(it, dict)]
-              walls = [it for it in items if it.get("type") == "WALLPAPER"]
-              nexts = [p.get("next") for p in pages if p.get("next")]
-              titles = [it.get("title") for it in walls[:3]]
-              others = sorted({it.get("type") for it in items if it.get("type") != "WALLPAPER"})
-              print(f"  listing[{n}]: pages={len(pages)} items={len(items)} walls={len(walls)} "
-                    f"nexts={[x[:28] for x in nexts]} others={others}")
-              print(f"    first titles: {titles}")
-          # every 'next' occurrence in raw flight order, with a little context
-          print("  all raw next positions:")
-          for m in re.finditer(r'"next":"([^"]{0,60})', flight):
-              ctx = flight[max(0, m.start()-60):m.start()]
-              print("    ...", ctx[-50:].replace("\n", " "), "=>", m.group(1)[:40])
-          PY
-          python3 /tmp/struct.py 2>&1 | head -60
-      - name: Walk the chain with the parser's exact cursor choice
-        run: |
-          set +e
-          cat > /tmp/walk.py <<'PY'
-          import json, re, sys, urllib.request
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          BASE = "https://www.zedge.net"
-          exec(open('/tmp/common.py').read()) if False else None
-
-          def http_get(url):
-              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
-              with urllib.request.urlopen(req, timeout=60) as r:
-                  return r.status, r.read().decode("utf-8", "replace")
 
           QUERY_DOC = r"""
               query browse_filteredList($input: BrowseFilteredListFilterInput) {
@@ -116,20 +30,14 @@ jobs:
             fragment browseFilteredListResource on BrowseContinuationItems {
               items {
                 ...browseListItemResource
-
-                ... on BrowseProfileItem {
-                  ...browseListProfileItemResource
-                }
+                ... on BrowseProfileItem { ...browseListProfileItemResource }
               }
               next
             }
 
             fragment browseListItemResource on BrowseItem {
               ... on BrowseWallpaperItem {
-                id
-                licensed
-                title
-                type
+                id licensed title type
                 meta { previewUrl microThumb thumbUrl }
               }
               ... on BrowseRingtoneItem { id title type meta { thumbUrl } }
@@ -144,6 +52,11 @@ jobs:
               id type avatarUrl verified name shareUrl
             }
             """
+
+          def http_get(url):
+              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return r.status, r.read().decode("utf-8", "replace")
 
           def graphql_post(cursor, keywords):
               inp = {"keywords": keywords, "itemType": "WALLPAPER", "categories": [],
@@ -199,7 +112,7 @@ jobs:
 
           def parse_listing(flight):
               """The parser's exact read: first initialData with non-empty
-              wallpaper pages; items = all pages flatMap, deduped;
+              wallpaper pages; items = all pages flatMap deduped;
               cursor = pages.last().next."""
               for listing in values_of(flight, "initialData"):
                   if not isinstance(listing, dict) or "pages" not in listing: continue
@@ -218,33 +131,70 @@ jobs:
                   return items, cursor
               return [], None
 
-          query = "neha sharma"
-          path = "/find/wallpapers/" + urllib.request.quote(query)
-          status, html = http_get(BASE + path)
-          flight = flight_stream(html)
-          items1, cursor1 = parse_listing(flight)
-          print("[parser-lane page 1] items:", len(items1), "cursor:", (cursor1 or "")[:44])
-          if not cursor1:
-              print("FAIL: no cursor via parser lane"); sys.exit(1)
+          def trial(query, kw_variants):
+              path = "/find/wallpapers/" + urllib.parse.quote(query)
+              status, html = http_get(BASE + path)
+              flight = flight_stream(html)
+              items1, cursor1 = parse_listing(flight)
+              print(f"== {query!r}: page1 walls={len(items1)} cursor={(cursor1 or '')[:36]}")
+              if not cursor1:
+                  print("   no cursor; skip"); return None
+              seen = {it["id"] for it in items1}
+              results = {}
+              for name, kw in kw_variants:
+                  try:
+                      st, payload = graphql_post(cursor1, kw)
+                      listing = (payload.get("data") or {}).get("browse_filteredList") or {}
+                      posts = [it for it in (listing.get("items") or [])
+                               if it.get("type") == "WALLPAPER" and it.get("id")]
+                      fresh = [it for it in posts if it["id"] not in seen]
+                      nxt = listing.get("next") or ""
+                      print(f"   kw={name!r:>12}: http {st} walls={len(posts)} fresh={len(fresh)} next={nxt[:32]}")
+                      results[name] = (fresh, nxt, posts)
+                  except Exception as e:
+                      print(f"   kw={name!r}: ERR {e}")
+                      results[name] = ([], "", [])
+              return seen, items1, cursor1, results
 
+          # The user's query: lowercase (as typed), titlecase, empty, single-word first
+          trial("neha sharma", [
+              ("verbatim", ["neha sharma"]),
+              ("titlecase", ["Neha Sharma"]),
+              ("empty", []),
+              ("first-word", ["neha"]),
+          ])
+
+          # Control: the route probe v4/v6 captured the site's own POST for
+          trial("wolf", [
+              ("verbatim", ["wolf"]),
+              ("titlecase", ["Wolf"]),
+              ("empty", []),
+          ])
+
+          # Multi-walk with whichever casing advances for neha sharma
+          print()
+          print("== chain walk, verbatim keywords, parser-lane cursor")
+          path = "/find/wallpapers/" + urllib.parse.quote("neha sharma")
+          status, html = http_get(BASE + path)
+          items1, cursor = parse_listing(flight_stream(html))
           seen = {it["id"] for it in items1}
-          cursor, total = cursor1, len(items1)
-          for page in (2, 3, 4, 5):
-              status, payload = graphql_post(cursor, [query])
+          total = len(items1)
+          kw = ["neha sharma"]
+          for page in (2, 3, 4, 5, 6):
+              if not cursor:
+                  print("   (no cursor; chain end)"); break
+              try:
+                  st, payload = graphql_post(cursor, kw)
+              except Exception as e:
+                  print(f"   page {page}: ERR {e}"); break
               listing = (payload.get("data") or {}).get("browse_filteredList") or {}
-              posts = listing.get("items") or []
-              fresh = [it for it in posts if it.get("type") == "WALLPAPER"
-                       and it.get("id") and it["id"] not in seen]
+              posts = [it for it in (listing.get("items") or [])
+                       if it.get("type") == "WALLPAPER" and it.get("id")]
+              fresh = [it for it in posts if it["id"] not in seen]
               for it in fresh: seen.add(it["id"])
               cursor = listing.get("next")
               total += len(fresh)
-              print(f"[parser-lane page {page}] http {status} items {len(posts)} fresh {len(fresh)} next {(cursor or 'NONE')[:40]}")
-              if not fresh and not cursor:
-                  print("  (honest end)"); break
-              if not fresh:
-                  print("FAIL: overlap-only answer"); sys.exit(1)
-              if not cursor:
-                  print("  (chain end)"); break
-          print(f"PASS: {total} unique wallpapers via the parser's exact lane")
+              print(f"   page {page}: walls={len(posts)} fresh={len(fresh)} next={(cursor or 'NONE')[:32]}")
+          print(f"TOTAL unique wallpapers for 'neha sharma': {total}")
           PY
-          python3 /tmp/walk.py 2>&1 | head -20
+          python3 /tmp/zprobe9.py 2>&1 | head -60
