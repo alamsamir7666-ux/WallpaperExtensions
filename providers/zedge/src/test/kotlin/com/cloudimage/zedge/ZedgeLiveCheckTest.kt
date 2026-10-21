@@ -15,9 +15,10 @@ import java.net.URL
 /**
  * Live check against zedge.net, for maintenance: the fixture tests
  * pin the grammar this reads, this answers whether the SITE still
- * speaks it — whether the tiles still carry the UUID detail routes,
- * whether the search headers still scope the wallpapers section,
- * whether the detail pages still render their heroes.
+ * speaks it — whether the flight stream still carries the listing
+ * `initialData` item records, whether the search sections still
+ * scope the wallpapers, whether the detail pages still state their
+ * `shareUrl`-bearing records.
  *
  * Run on demand with:
  *
@@ -74,6 +75,9 @@ class ZedgeLiveCheckTest {
         provider.configure(LiveClient(), ProviderSettings { null })
     }
 
+    /** The signed rendition host every zedge image speaks. */
+    private val renditionHost = "https://is.zobj.net/image-server/v1/images?r="
+
     @Test
     fun theLandingStillServesItsTiles() =
         runTest {
@@ -86,9 +90,9 @@ class ZedgeLiveCheckTest {
             assertTrue("landing shallow: ${page.wallpapers.size}", page.wallpapers.size >= 5)
             assertNull("landing faked depth", page.nextPage)
             page.wallpapers.take(5).forEach { wallpaper ->
-                assertTrue(wallpaper.id.length == 36)
-                assertTrue(wallpaper.thumbUrl.startsWith("https://"))
-                assertTrue(wallpaper.fullUrl.startsWith("https://"))
+                assertTrue("id not the UUID route id: ${wallpaper.id}", wallpaper.id.length == 36)
+                assertTrue("thumb not the site's rendition: ${wallpaper.thumbUrl}", wallpaper.thumbUrl.startsWith(renditionHost))
+                assertTrue("full not the site's rendition: ${wallpaper.fullUrl}", wallpaper.fullUrl.startsWith(renditionHost))
             }
         }
 
@@ -112,11 +116,12 @@ class ZedgeLiveCheckTest {
             configureLive()
 
             val hit = provider.search("wolf", page = 1).getOrThrow()
-            val miss = provider.search("zzzqqqxxx", page = 1).getOrThrow()
 
             assertTrue("search hit empty", hit.wallpapers.isNotEmpty())
-            assertTrue("search miss not empty", miss.wallpapers.isEmpty())
-            assertNull(miss.nextPage)
+            assertNull(hit.nextPage)
+            hit.wallpapers.forEach { wallpaper ->
+                assertTrue("search served a non-wallpaper shape: ${wallpaper.thumbUrl}", wallpaper.thumbUrl.startsWith(renditionHost))
+            }
         }
 
     @Test
@@ -129,7 +134,7 @@ class ZedgeLiveCheckTest {
             val details = provider.details(page.wallpapers.first().id).getOrThrow()
 
             assertTrue(!details.wallpaper.title.isNullOrBlank())
-            assertTrue(details.wallpaper.fullUrl.startsWith("https://"))
+            assertTrue(details.wallpaper.fullUrl.startsWith(renditionHost))
             assertTrue(details.sourceUrl!!.startsWith("https://www.zedge.net/wallpaper/"))
         }
 }

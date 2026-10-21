@@ -18,7 +18,7 @@ import kotlin.random.Random
 /**
  * Zedge (https://www.zedge.net) as a Cloudimage provider package —
  * the tenth keyless source in the repository set: no API, no key, the
- * site's own pages read the way its browser UI renders them.
+ * site's own pages read the way its browser UI hydrates them.
  *
  * ## The flat directory (no album paradigm)
  *
@@ -39,32 +39,47 @@ import kotlin.random.Random
  *   and `people` ride them natively; the rest of the directory serves
  *   the home shelves below through the site's own search.
  * - **Search** (`/find/{query}`) — the site's own mixed-content
- *   search, scoped to its "Wallpapers" section so ringtones,
- *   notification sounds and dynamic wallpapers never leak in. A
- *   query the site answers with audio only parses to the honest
- *   zero, the same honest-empty rule every flat source here follows.
+ *   search, scoped to its `WALLPAPER` section so ringtones,
+ *   notification sounds, live wallpapers and artist profiles never
+ *   leak in. A query the site answers with audio only parses to the
+ *   honest zero, the same honest-empty rule every flat source follows.
  * - **Wallpaper pages** (`/wallpaper/{uuid}`) — the detail route the
- *   site's own sitemap system publishes by the thousand; the UUID
- *   is the wallpaper's stable id. The page discloses the `h1`
- *   title, the hero image, the `og:image` fallback and the tag row.
+ *   site's own sitemap system publishes by the thousand; the UUID is
+ *   the wallpaper's stable id. The page's flight record discloses the
+ *   title, the description, the tag row, the artist and the
+ *   renditions.
+ *
+ * ## Reading the flight stream (v1.1.0)
+ *
+ * Zedge's grids are CLIENT-HYDRATED: the HTML its server sends carries
+ * the app shell and a Next.js RSC flight stream — the actual
+ * wallpapers live in that stream as `initialData` item records, not in
+ * DOM anchors (there are none). [ZedgeParser] reads the stream — the
+ * site's own SSR state, the same data its UI hydrates from — so every
+ * listing and detail parses no matter which lane of the host's fetch
+ * ladder delivered the document (the plain GET's raw HTML and the
+ * WebView lane's rendered DOM both keep their script contents).
  *
  * ## Single-page listings (the honest answer)
  *
- * The grids' "Load more" is a client-side cursor the URL cannot
- * express — the site offers no page-addressable listing grammar
- * (a `?page=` parameter is ignored). Rather than fake depth by
- * re-serving the first page, every listing answers exactly the one
- * page the site itself renders and reports `nextPage = null`. One
- * page per request, the same politeness the other keyless sources
- * practice, and no duplicated items.
+ * The grids' "Load more" is a client-side cursor XHR the URL cannot
+ * express — the `?cursor=` form is ignored by the server (verified
+ * live: the identical page re-served) — so every listing answers
+ * exactly the one page the site itself renders and reports
+ * `nextPage = null`. One page per request, the same politeness the
+ * other keyless sources practice, and no duplicated items to fake
+ * depth.
  *
  * ## Images — taken verbatim, never derived
  *
- * Every tile's thumb is the `<img>` URL the site itself serves,
- * whatever CDN host it speaks; details bring the hero the page
- * displays, the `og:image` share rendition as fallback. Nothing is
- * derived or guessed — the same image URLs the site's own browser
- * UI loads are the ones this package hands the host.
+ * Every tile's thumb is the site's own grid crop (`thumbUrl`, a
+ * signed `is.zobj.net` rendition), and the tile also carries the
+ * site's bigger `previewUrl` as a working full before details are
+ * ever fetched; details upgrade to the preview the wallpaper page
+ * itself displays. The image host serves unchallenged — image bytes
+ * never need the document lane. Nothing is derived or guessed — the
+ * URLs the site's own browser UI loads are the ones this package
+ * hands the host.
  *
  * ## The Cloudflare chapter (the host ladder owns it)
  *
@@ -74,11 +89,9 @@ import kotlin.random.Random
  * plugin-facing HTTP facade, a non-2xx answer (the challenge's 403)
  * is reported as a [ProviderHttpException] and left to propagate —
  * in the app, the host's own clearance ladder (the engine document
- * lane, the wallpapersden interactive precedent) solves the
- * challenge once visibly and then rides the WebView silently for
- * every subsequent document fetch. Image bytes never need the
- * document lane, and the site serves them from its image hosts
- * unchallenged to good-IP clients.
+ * lane, the wallpapersden interactive precedent) solves the challenge
+ * once visibly and then rides the WebView silently for every
+ * subsequent document fetch.
  *
  * ## Politeness
  *
@@ -102,13 +115,11 @@ import kotlin.random.Random
  *
  * ## Dimensions
  *
- * Grid items carry NONE, on purpose: the tiles' image attributes are
- * the grid crop, identical on every tile and true of no wallpaper. A
- * value that wrong is worse than no value, and the host renders null
- * dimensions as a placeholder. The detail page is where the truth
- * would live; zedge states no pixel prose there either, so
- * [WallpaperDetails.resolution] stays honestly null rather than
- * invented.
+ * Neither the listing items nor the detail records state pixel
+ * dimensions anywhere, so [Wallpaper.width]/[Wallpaper.height] and
+ * [WallpaperDetails.resolution] stay honestly null rather than
+ * invented — the host renders its placeholder, and the image bytes
+ * themselves carry the truth for the viewer.
  */
 class ZedgeWallpaperProvider : WallpaperProvider {
     private var httpClient: ProviderHttpClient? = null
@@ -117,7 +128,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "Zedge",
-            versionName = "1.0.0",
+            versionName = "1.1.0",
             author = "Cloudimage",
             description =
                 "Free HD phone wallpapers from zedge.net - the flat directory of single " +
@@ -149,13 +160,12 @@ class ZedgeWallpaperProvider : WallpaperProvider {
      * The default feed: the popular landing, ridden through the host
      * vocabulary — `category=anime` and `category=people` walk the
      * site's own category pages natively (`general` has no honest
-     * expression — the site files no such category — so it falls
-     * back to the landing, the contract's documented behavior for
-     * values a provider cannot express). Sorting values are
-     * ignored: the landing IS the site's download-ranked popular
-     * order, and no other ranking is addressable. Single page —
-     * [ZedgeParser]'s documentation explains why `nextPage` never
-     * lies about more.
+     * expression — the site files no such category — so it falls back
+     * to the landing, the contract's documented behavior for values
+     * a provider cannot express). Sorting values are ignored: the
+     * landing IS the site's download-ranked popular order, and no
+     * other ranking is addressable. Single page — [ZedgeParser]'s
+     * documentation explains why `nextPage` never lies about more.
      */
     override suspend fun popular(
         page: Int,
@@ -169,10 +179,10 @@ class ZedgeWallpaperProvider : WallpaperProvider {
 
     /**
      * The site's own search, scoped to its wallpapers section: one
-     * request, the tiles between the "Wallpapers" header and the
-     * next content-type header — ringtones and notification sounds
-     * the site may also answer are never served as wallpapers, and
-     * an audio-only answer parses to the honest zero. A blank query
+     * request, the items of its `WALLPAPER` section — ringtones,
+     * notification sounds, live wallpapers and artist profiles the
+     * site may also answer are never served as wallpapers, and an
+     * audio-only answer parses to the honest zero. A blank query
      * (the contract's escape hatch) lands on the popular landing's
      * first page, the same default the blank popular feed shows.
      */
@@ -187,7 +197,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
             }
             if (page != 1) return@runCatching Page(emptyList(), nextPage = null)
             val html = fetchPage("$BASE_URL/find/${encode(query)}")
-            Page(ZedgeParser.parseSearchGrid(html).map(::gridWallpaper), nextPage = null)
+            Page(ZedgeParser.parseSearch(html).map(::gridWallpaper), nextPage = null)
         }
 
     /**
@@ -212,8 +222,8 @@ class ZedgeWallpaperProvider : WallpaperProvider {
     /**
      * The site's directory as shelves: the popular landing, the two
      * native host-vocabulary categories, then the site's own
-     * category names as tag-style query presets its search
-     * addresses precisely. Cheap and offline, as the contract asks.
+     * category names as tag-style query presets its search addresses
+     * precisely. Cheap and offline, as the contract asks.
      */
     override suspend fun sections(): List<HomeSection> =
         listOf(
@@ -239,16 +249,15 @@ class ZedgeWallpaperProvider : WallpaperProvider {
 
     /**
      * The definitive record for an id: the wallpaper page re-fetched
-     * and re-read — the cleaned `h1` title, the hero the page
-     * displays (the `og:image` fallback when it ships none), the
-     * site's own tag row, the page URL. A page that does not speak
-     * the shape is a source failure reported as such: the dead-UUID
-     * screen renders its own "couldn't find it" `h1` but no
-     * wallpaper image, and a page with neither title nor image is
-     * nothing this can honestly serve — the grid item's own URLs
-     * already work, so the host's viewer degrades gracefully.
-     * Transport failures (the challenge's 403 among them)
-     * propagate untouched for the host ladder to own.
+     * and re-read — the site's own title, its tag row, the artist it
+     * credits, the grid crop as the thumb and the preview the page
+     * itself displays as the full, the page's canonical share URL as
+     * the source. A page that does not carry the record is a source
+     * failure reported as such: the site's own "couldn't find it"
+     * screen ships no record, and the grid item's own URLs already
+     * work, so the host's viewer degrades gracefully. Transport
+     * failures (the challenge's 403 among them) propagate untouched
+     * for the host ladder to own.
      */
     override suspend fun details(id: String): Result<WallpaperDetails> =
         runCatching {
@@ -256,21 +265,19 @@ class ZedgeWallpaperProvider : WallpaperProvider {
             val record =
                 ZedgeParser.parseDetail(html)
                     ?: error("unrecognized wallpaper page for '$id'")
-            val full =
-                record.fullUrl
-                    ?: error("unrecognized wallpaper page for '$id'")
             rememberTags(record.tags)
             WallpaperDetails(
                 wallpaper =
                     Wallpaper(
                         id = id,
                         providerId = ID,
-                        thumbUrl = record.displayThumbUrl ?: full,
-                        fullUrl = full,
+                        thumbUrl = record.thumbUrl,
+                        fullUrl = record.fullUrl,
                         title = record.title,
                         tags = record.tags,
                     ),
-                sourceUrl = wallpaperUrlOf(id),
+                author = record.author,
+                sourceUrl = record.shareUrl ?: wallpaperUrlOf(id),
             )
         }
 
@@ -290,11 +297,11 @@ class ZedgeWallpaperProvider : WallpaperProvider {
     // ------------------------------------------------------------ streams
 
     /**
-     * One listing page: fetch, parse the tiles, the honest
+     * One listing page: fetch, parse the stream's tiles, the honest
      * `nextPage = null` every time (the site's "Load more" cursor is
-     * not URL-addressable — see the class documentation). A page
-     * past the first answers the honest empty, never a repeat of
-     * the first.
+     * a client XHR the URL cannot express — see the class
+     * documentation). A page past the first answers the honest empty,
+     * never a repeat of the first — and never a request either.
      */
     private suspend fun listingPage(
         path: String,
@@ -308,19 +315,18 @@ class ZedgeWallpaperProvider : WallpaperProvider {
     // ------------------------------------------------------------- mapping
 
     /**
-     * A tile to a wallpaper: the thumb is the tile's own image URL
-     * verbatim, and the full is the same URL — a working image of
-     * the same wallpaper before details are ever fetched; [details]
-     * upgrades it to the page's own hero. Titles ride the tile when
-     * it ships a real one (search tiles do; landing tiles speak
-     * download badges, which read as null).
+     * A tile to a wallpaper: the thumb is the site's own grid crop,
+     * and the full is the site's own bigger preview — a working
+     * image of the same wallpaper before details are ever fetched;
+     * [details] upgrades it to the page's own display rendition.
+     * Titles ride the tile when the site states one.
      */
     private fun gridWallpaper(item: ZedgeParser.GridItem): Wallpaper =
         Wallpaper(
             id = item.id,
             providerId = ID,
             thumbUrl = item.thumbUrl,
-            fullUrl = item.thumbUrl,
+            fullUrl = item.fullUrl,
             title = item.title,
         )
 
@@ -349,7 +355,8 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         return response.bodyText
     }
 
-    private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
+    /** URL-encoded for the site's paths — spaces as `%20`, the form its own routes speak. */
+    private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
     private fun httpError(status: Int): Exception = ProviderHttpException("zedge.net answered HTTP $status")
 
