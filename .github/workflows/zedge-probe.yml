@@ -9,99 +9,212 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Capture the real Load-more request with Chrome
+      - name: Capture the FULL load-more exchange with Chrome
         run: |
           set +e
           sudo npm install -g puppeteer-core --silent 2>&1 | tail -1
           cat > /tmp/capture.js <<'JS'
           const puppeteer = require('puppeteer-core');
+          const fs = require('fs');
           (async () => {
             const browser = await puppeteer.launch({
               executablePath: '/usr/bin/google-chrome',
               headless: 'new',
-              args: ['--no-sandbox', '--disable-dev-shm-usage', '--window-size=1280,2000'],
+              args: ['--no-sandbox', '--disable-dev-shm-usage', '--window-size=1280,2400'],
             });
             const page = await browser.newPage();
-            await page.setViewport({width: 1280, height: 2000});
-            const captured = [];
-            const push = (phase, r) => captured.push({
-              phase, url: r.url().slice(0, 400), method: r.method(),
-              type: r.resourceType(),
-              post: (r.postData() || '').slice(0, 600),
-              headers: Object.fromEntries(Object.entries(r.headers()).filter(([k]) =>
-                ['next-action','rsc','next-router-state-tree','content-type','accept'].includes(k))),
+            await page.setViewport({width: 1280, height: 2400});
+            const posts = [];
+            const responses = [];
+            page.on('request', r => {
+              if (r.url().includes('/api/graphql')) {
+                posts.push({url: r.url(), method: r.method(), post: r.postData() || null,
+                  headers: Object.fromEntries(Object.entries(r.headers()).filter(([k]) =>
+                    ['content-type','accept','next-action','rsc','next-router-state-tree','authorization','x-api-key','apollographql-client-name'].includes(k)))});
+              }
             });
-            page.on('request', r => { if (r.url().includes('zedge.net') && !/\.(js|css|png|svg|woff2?|ico|mp4|webp)/.test(r.url())) push('request', r); });
-            const target = process.argv[2] || 'https://www.zedge.net/find/wallpapers/wolf';
+            page.on('response', async r => {
+              if (r.url().includes('/api/graphql')) {
+                try { responses.push({url: r.url(), status: r.status(), body: (await r.text()).slice(0, 200000)}); }
+                catch (e) { responses.push({url: r.url(), status: r.status(), body: 'READ_ERR ' + e.message}); }
+              }
+            });
+            const target = 'https://www.zedge.net/find/wallpapers/wolf';
             console.log('GOTO', target);
-            try {
-              await page.goto(target, {waitUntil: 'networkidle2', timeout: 90000});
-            } catch (e) { console.log('goto err', e.message); }
-            await new Promise(r => setTimeout(r, 4000));
-            console.log('TITLE:', await page.title());
-            console.log('CF challenge?', (await page.content()).includes('Just a moment'));
-            // scroll to bottom to surface lazy Load-more
-            for (let i = 0; i < 6; i++) { await page.evaluate(() => window.scrollBy(0, 1500)); await new Promise(r => setTimeout(r, 700)); }
-            const btn = await page.evaluateHandle(() => {
-              const all = [...document.querySelectorAll('button, a, [role="button"], div, span')];
-              return all.find(e => /load more|show more|see more|more wallpapers/i.test((e.textContent || '') + (e.getAttribute && e.getAttribute('aria-label') || '')));
+            try { await page.goto(target, {waitUntil: 'networkidle2', timeout: 90000}); }
+            catch (e) { console.log('goto err', e.message); }
+            await new Promise(r => setTimeout(r, 5000));
+            for (let i = 0; i < 8; i++) { await page.evaluate(() => window.scrollBy(0, 1500)); await new Promise(r => setTimeout(r, 600)); }
+            const findBtn = () => page.evaluateHandle(() => {
+              const all = [...document.querySelectorAll('button, a, [role="button"], span, div')];
+              return all.find(e => /^load more|load more$/i.test(((e.textContent || '') + ' ' + (e.getAttribute && e.getAttribute('aria-label') || '')).trim()))
+                     || all.find(e => /load more/i.test((e.textContent || '') + (e.getAttribute && e.getAttribute('aria-label') || '')));
             });
-            const el = btn && btn.asElement();
-            console.log('LOADMORE ELEMENT:', el ? (await el.evaluate(n => n.outerHTML.slice(0, 400))) : 'NOT FOUND');
-            if (el) {
-              await el.scrollIntoView();
-              await new Promise(r => setTimeout(r, 1000));
-              try { await el.click(); console.log('CLICKED'); } catch (e) { console.log('click err', e.message); }
-              await new Promise(r => setTimeout(r, 8000));
+            let clicked = 0;
+            for (let round = 0; round < 2; round++) {
+              const btn = await findBtn();
+              const el = btn && btn.asElement();
+              console.log('ROUND', round, 'LOADMORE ELEMENT:', el ? (await el.evaluate(n => (n.textContent || '').trim().slice(0, 60) + ' | tag=' + n.tagName)) : 'NOT FOUND');
+              if (el) {
+                try { await el.scrollIntoView(); } catch (e) {}
+                await new Promise(r => setTimeout(r, 800));
+                try { await el.click(); clicked++; console.log('CLICKED', clicked); } catch (e) { console.log('click err', e.message); }
+                await new Promise(r => setTimeout(r, 9000));
+                for (let i = 0; i < 4; i++) { await page.evaluate(() => window.scrollBy(0, 1500)); await new Promise(r => setTimeout(r, 500)); }
+              }
             }
-            const tiles1 = await page.evaluate(() => document.querySelectorAll('a[href*="/wallpaper/"]').length);
-            console.log('TILE LINKS AFTER:', tiles1);
-            console.log('=== CAPTURED REQUESTS ===');
-            for (const c of captured) console.log(JSON.stringify(c));
-            const flight = await page.evaluate(() => {
-              const s = [...document.querySelectorAll('script')].map(x => x.textContent).join('');
-              const m = s.match(/"next":"([^"]{20,300})"/);
-              return m ? m[1] : null;
-            });
-            console.log('PAGE1 FLIGHT CURSOR:', flight);
+            const tiles = await page.evaluate(() => document.querySelectorAll('a[href*="/wallpaper/"]').length);
+            console.log('TILE LINKS AFTER:', tiles);
+            console.log('=== GRAPHQL POSTS (FULL) ===');
+            for (const p of posts) console.log(JSON.stringify(p));
+            console.log('=== GRAPHQL RESPONSES ===');
+            for (const r of responses) console.log(JSON.stringify(r));
+            fs.writeFileSync('/tmp/gql_capture.json', JSON.stringify({posts, responses}));
             await browser.close();
-          })().catch(e => { console.error('FATAL', e); process.exit(1); });
+          })().catch(e => { console.error('FATAL', e); try { fs.writeFileSync('/tmp/gql_capture.json', JSON.stringify({fatal: String(e)})); } catch (_) {} process.exit(1); });
           JS
-          NODE_PATH=$(npm root -g) node /tmp/capture.js "https://www.zedge.net/find/wallpapers/wolf" 2>&1 | head -80
-      - name: Deep-read the infinite-query chunk
+          NODE_PATH=$(npm root -g) node /tmp/capture.js 2>&1 | head -40
+          echo "POSTS+RESPONSES saved: $(ls -la /tmp/gql_capture.json 2>/dev/null)"
+      - name: Replay the load-more as a GET (graphql over GET) and walk the chain
+        run: |
+          set +e
+          cat > /tmp/gettest.py <<'PY'
+          import json, urllib.parse, urllib.request, re, sys
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          cap = json.load(open('/tmp/gql_capture.json'))
+          posts = cap.get('posts', [])
+          responses = cap.get('responses', [])
+          gql_posts = [p for p in posts if p.get('post') and 'browse_filteredList' in p['post']]
+          if not gql_posts:
+              print("NO browse_filteredList POST captured - aborting GET test")
+              sys.exit(0)
+          # the click posts are the ones whose variables carry a next cursor
+          parsed = []
+          for p in gql_posts:
+              try: parsed.append(json.loads(p['post']))
+              except Exception as e: print("unparseable post:", e)
+          def input_of(body): return (body.get('variables') or {}).get('input') or {}
+          cursor_posts = [b for b in parsed if input_of(b).get('next')]
+          bare_posts = [b for b in parsed if not input_of(b).get('next')]
+          print("captured posts: total=%d with-cursor=%d bare=%d" % (len(parsed), len(cursor_posts), len(bare_posts)))
+          base_input = input_of(cursor_posts[0] if cursor_posts else bare_posts[0]).copy()
+          print("BASE INPUT KEYS:", sorted(base_input.keys()))
+          print("BASE INPUT (sans next):", json.dumps({k: v for k, v in base_input.items() if k != 'next'})[:1500])
+          qdoc = (cursor_posts[0] if cursor_posts else bare_posts[0]).get('query')
+          print("QUERY DOC LEN:", len(qdoc or ''))
+          # response shape check
+          for r in responses:
+              if r.get('status') == 200 and 'browse_filteredList' in (r.get('body') or ''):
+                  try:
+                      rb = json.loads(r['body'])
+                      items = rb['data']['browse_filteredList']['items']
+                      print("CAPTURED RESPONSE: items=%d next=%s" % (len(items), (rb['data']['browse_filteredList'].get('next') or '')[:60]))
+                      print("FIRST ITEM KEYS:", sorted(items[0].keys()))
+                      print("FIRST ITEM (first 1200 chars):", json.dumps(items[0])[:1200])
+                  except Exception as e:
+                      print("response parse err:", e, (r.get('body') or '')[:300])
+                  break
+          def gql_get(query, input_obj):
+              params = urllib.parse.urlencode({'query': query, 'variables': json.dumps({'input': input_obj})})
+              url = 'https://www.zedge.net/api/graphql?' + params
+              req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': '*/*', 'Content-Type': 'application/json'})
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      return resp.status, resp.read().decode('utf-8', 'replace')
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode('utf-8', 'replace')[:800]
+              except Exception as e:
+                  return -1, 'ERR ' + str(e)
+          # TEST 1: GET with the exact captured query + cursor input
+          if cursor_posts:
+              inp = input_of(cursor_posts[0])
+              st, body = gql_get(qdoc, inp)
+              print("GET with-cursor: http=%s body[:400]=%s" % (st, body[:400]))
+              try:
+                  data = json.loads(body)['data']['browse_filteredList']
+                  print("  -> GET WORKS! items=%d next=%s" % (len(data['items']), (data.get('next') or '')[:60]))
+              except Exception as e:
+                  print("  -> GET body did not parse as listing:", e)
+          # TEST 2: GET bare (no cursor) - does it serve page 1?
+          bare = {k: v for k, v in base_input.items() if k != 'next'}
+          st2, body2 = gql_get(qdoc, bare)
+          print("GET bare: http=%s body[:400]=%s" % (st2, body2[:400]))
+          # TEST 3: chain walk 3 pages via GET if test 1 worked
+          def items_of(body):
+              try: return json.loads(body)['data']['browse_filteredList']['items']
+              except Exception: return None
+          def next_of(body):
+              try: return json.loads(body)['data']['browse_filteredList'].get('next')
+              except Exception: return None
+          ids1 = items_of(body2) if isinstance(body2, str) else None
+          if ids1:
+              seen = set(i['id'] for i in ids1)
+              cursor = next_of(body2)
+              for page in range(2, 6):
+                  if not cursor:
+                      print("  chain: page %d - no cursor, stop" % page)
+                      break
+                  stn, bodyn = gql_get(qdoc, {**bare, 'next': cursor})
+                  itemsn = items_of(bodyn) if stn == 200 else None
+                  if not itemsn:
+                      print("  chain: page %d http=%s stop (%s)" % (page, stn, bodyn[:200]))
+                      break
+                  fresh = [i['id'] for i in itemsn if i['id'] not in seen]
+                  print("  chain: page %d http=%s items=%d fresh=%d next=%s" % (page, stn, len(itemsn), len(fresh), (next_of(bodyn) or '')[:50]))
+                  seen.update(i['id'] for i in itemsn)
+                  if not fresh:
+                      print("  chain: page %d all dups - stop" % page)
+                      break
+                  if cursor == next_of(bodyn):
+                      print("  chain: page %d ECHO cursor - stop" % page)
+                      break
+                  cursor = next_of(bodyn)
+          # TEST 4: does the input of the SEARCH page carry the term? print it fully for the record
+          print("FULL SEARCH INPUT:", json.dumps(base_input)[:2000])
+          PY
+          python3 /tmp/gettest.py 2>&1 | head -60
+      - name: SSR keyword-filter probes (GET-only search alternatives)
         run: |
           set +e
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          curl -sL -A "$UA" --max-time 90 -o /tmp/wswolf.html "https://www.zedge.net/find/wallpapers/wolf"
-          mkdir -p /tmp/chunks && cd /tmp/chunks
-          for c in $(grep -oE 'static/chunks/[^"\\]+\.js' /tmp/wswolf.html | sort -u); do
-            n=$(echo "$c" | md5sum | cut -c1-8)
-            curl -sL -A "$UA" --max-time 60 -o "$n.js" "https://www.zedge.net/_next/$c" 2>/dev/null
-          done
-          echo "chunks: $(ls | wc -l)"
-          cat > /tmp/deep.py <<'PY'
-          import glob, re
-          for f in glob.glob('/tmp/chunks/*.js'):
-              try: src = open(f, encoding='utf-8', errors='replace').read()
-              except Exception: continue
-              if 'useInfiniteQuery' not in src and 'pageParam' not in src: continue
-              if 'queryKey' not in src: continue
-              for m in re.finditer(r'queryFn[^}]{0,120}pageParam[^}]{0,120}', src):
-                  print('FILE', f)
-                  a = max(0, m.start() - 1200)
-                  print('--- queryFn context ---')
-                  print(src[a:m.end() + 1200])
-                  print('--- end ---')
-          # hunt the fetch implementation the hook calls: look for fetch( with json/api/graphql markers
-          for f in glob.glob('/tmp/chunks/*.js'):
-              src = open(f, encoding='utf-8', errors='replace').read()
-              for m in re.finditer(r'fetch\(', src):
-                  a = max(0, m.start() - 500)
-                  seg = src[a:m.end() + 700]
-                  if re.search(r'(next|cursor|page|graphql|api\.zedge|/api/)', seg, re.I):
-                      print('FETCH in', f)
-                      print(seg)
-                      print('=== fetch context end ===')
-                      break
+          cat > /tmp/ssrtest.py <<'PY'
+          import re, json, urllib.request, urllib.parse
+          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          def get(url):
+              req = urllib.request.Request(url, headers={'User-Agent': UA})
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      return r.status, r.read().decode('utf-8', 'replace')
+              except urllib.error.HTTPError as e:
+                  return e.code, ''
+              except Exception as e:
+                  return -1, ''
+          def flight_ids(html):
+              # concatenate next_f chunks and pull initialData pages items ids
+              body = ''.join(re.findall(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.S))
+              try: body = body.encode().decode('unicode_escape')
+              except Exception: pass
+              return re.findall(r'"id":"([0-9a-f-]{36})"', body)
+          bare = get('https://www.zedge.net/wallpapers')
+          bare_ids = set(flight_ids(bare[1])) if bare[0] == 200 else set()
+          print("landing /wallpapers: http=%s ids=%d" % (bare[0], len(bare_ids)))
+          for variant in ['keywords=wolf', 'keyword=wolf', 'q=wolf', 'search=wolf', 'query=wolf', 'term=wolf', 'tag=wolf', 'tags=wolf', 'filter=wolf', 'categories=wolf']:
+              st, html = get('https://www.zedge.net/wallpapers?' + variant)
+              ids = flight_ids(html) if st == 200 else []
+              diff = len([i for i in ids if i not in bare_ids])
+              print("  /wallpapers?%s -> http=%s ids=%d not-in-bare=%d" % (variant, st, len(ids), diff))
+          # the real user query, page 1 count:
+          st, html = get('https://www.zedge.net/find/wallpapers/neha%20sharma')
+          ids = flight_ids(html) if st == 200 else []
+          print("search /find/wallpapers/neha sharma: http=%s ids=%d" % (st, len(ids)))
+          cursor = re.search(r'"next":"([^"]{20,400})"', html.replace('\\u0026','&'))
+          print("  cursor present:", bool(cursor))
+          # prove the SSR category page ignores the cursor there (echo check), for the record:
+          if cursor:
+              c = cursor.group(1)
+              st2, html2 = get('https://www.zedge.net/find/wallpapers/neha%20sharma?cursor=' + urllib.parse.quote(c, safe=''))
+              ids2 = flight_ids(html2) if st2 == 200 else []
+              inter = len(set(ids) & set(ids2))
+              print("  cursor walk: http=%s ids=%d overlap-with-page1=%d" % (st2, len(ids2), inter))
           PY
-          python3 /tmp/deep.py 2>&1 | head -120
+          python3 /tmp/ssrtest.py 2>&1 | head -30
