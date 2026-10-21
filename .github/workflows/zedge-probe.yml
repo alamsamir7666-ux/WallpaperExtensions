@@ -9,114 +9,104 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: keywords-SSR filter verdict (proper flight parse + titles + cursor walk)
+      - name: Capture the load-more GraphQL input of all three route families
         run: |
           set +e
-          cat > /tmp/kw.py <<'PY'
-          import json, re, urllib.request, urllib.parse
+          sudo npm install -g puppeteer-core --silent 2>&1 | tail -1
+          cat > /tmp/capture.js <<'JS'
+          const puppeteer = require('puppeteer-core');
+          const fs = require('fs');
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          (async () => {
+            const browser = await puppeteer.launch({
+              executablePath: '/usr/bin/google-chrome',
+              headless: 'new',
+              args: ['--no-sandbox', '--disable-dev-shm-usage', '--window-size=1280,2400'],
+            });
+            const targets = [
+              'https://www.zedge.net/find/wallpapers/wolf',
+              'https://www.zedge.net/wallpapers',
+              'https://www.zedge.net/category/wallpapers/wolf',
+            ];
+            const all = [];
+            for (const target of targets) {
+              const page = await browser.newPage();
+              await page.setViewport({width: 1280, height: 2400});
+              const posts = [];
+              page.on('request', r => {
+                if (r.url().includes('/api/graphql') && r.postData() && r.postData().includes('browse_filteredList')) {
+                  posts.push(r.postData());
+                }
+              });
+              console.log('GOTO', target);
+              try { await page.goto(target, {waitUntil: 'networkidle2', timeout: 90000}); }
+              catch (e) { console.log('goto err', e.message); }
+              await sleep(5000);
+              for (let i = 0; i < 8; i++) { await page.evaluate(() => window.scrollBy(0, 1500)); await sleep(600); }
+              const btn = await page.evaluateHandle(() => {
+                const all = [...document.querySelectorAll('button, a, [role="button"], span, div')];
+                return all.find(e => /load more/i.test((e.textContent || '') + (e.getAttribute && e.getAttribute('aria-label') || '')));
+              });
+              const el = btn && btn.asElement();
+              console.log('LOADMORE:', el ? (await el.evaluate(n => (n.textContent || '').trim().slice(0, 40) + '|' + n.tagName)) : 'NOT FOUND');
+              if (el) {
+                try { await el.scrollIntoView(); } catch (e) {}
+                await sleep(800);
+                try { await el.click(); console.log('CLICKED'); } catch (e) { console.log('click err', e.message); }
+                await sleep(9000);
+              }
+              console.log('CAPTURED POSTS for ' + target + ': ' + posts.length);
+              all.push({target, posts});
+              await page.close();
+            }
+            fs.writeFileSync('/tmp/all_inputs.json', JSON.stringify(all, null, 1));
+            for (const a of all) {
+              console.log('=== ' + a.target + ' ===');
+              a.posts.forEach((p, i) => {
+                try {
+                  const j = JSON.parse(p);
+                  const inp = (j.variables || {}).input || {};
+                  console.log('POST[' + i + '] input=' + JSON.stringify({k: inp.keywords, c: inp.categories, it: inp.itemType, pt: inp.profileType, s: inp.sort, sz: inp.size, hasNext: !!inp.next}));
+                } catch (e) { console.log('POST[' + i + '] unparseable'); }
+              });
+            }
+            await browser.close();
+          })().catch(e => { console.error('FATAL', e); process.exit(1); });
+          JS
+          NODE_PATH=$(npm root -g) node /tmp/capture.js 2>&1 | head -50
+      - name: Bare POST replay from curl (does the POST need cookies at all?)
+        run: |
+          set +e
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          cat > /tmp/replay.py <<'PY'
+          import json, urllib.request
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          def get(url):
-              req = urllib.request.Request(url, headers={'User-Agent': UA})
-              try:
-                  with urllib.request.urlopen(req, timeout=60) as r:
-                      return r.status, r.read().decode('utf-8', 'replace')
-              except urllib.error.HTTPError as e:
-                  return e.code, e.read().decode('utf-8', 'replace')[:300]
-              except Exception as e:
-                  return -1, 'ERR ' + str(e)
-          def balanced_end(text, start):
-              depth = 0; ins = False; esc = False
-              for i in range(start, len(text)):
-                  c = text[i]
-                  if ins:
-                      if esc: esc = False
-                      elif c == '\\': esc = True
-                      elif c == '"': ins = False
-                  else:
-                      if c == '"': ins = True
-                      elif c in '{[': depth += 1
-                      elif c in '}]':
-                          depth -= 1
-                          if depth == 0: return i
-              return None
-          def flight_of(html):
-              stream = []
-              for m in re.finditer(r'self\.__next_f\.push\(\[1,"', html):
-                  i = m.end(); buf = []
-                  while i < len(html):
-                      c = html[i]
-                      if c == '\\' and i + 1 < len(html): buf.append(c + html[i+1]); i += 2
-                      elif c == '"': i += 1; break
-                      else: buf.append(c); i += 1
-                  try: stream.append(json.loads('"' + ''.join(buf) + '"'))
-                  except Exception: pass
-              return ''.join(stream)
-          def listing_of(html):
-              flight = flight_of(html)
-              out = []
-              for m in re.finditer(r'"initialData":', flight):
-                  s = m.end()
-                  while s < len(flight) and flight[s].isspace(): s += 1
-                  if s >= len(flight) or flight[s] not in '{[': continue
-                  e = balanced_end(flight, s)
-                  if e is None: continue
-                  try: obj = json.loads(flight[s:e+1])
-                  except Exception: continue
-                  if not isinstance(obj, dict) or 'pages' not in obj: continue
-                  items, cursor = [], None
-                  for p in obj.get('pages') or []:
-                      if isinstance(p, dict):
-                          for it in p.get('items') or []:
-                              if isinstance(it, dict) and it.get('id') and it.get('type') == 'WALLPAPER':
-                                  items.append({'id': it['id'], 'title': it.get('title')})
-                          if isinstance(p, dict) and p.get('next'): cursor = p['next']
-                  if items: return items, cursor
-              return [], None
-          def show(label, url):
-              st, html = get(url)
-              if st != 200:
-                  print("%-46s http=%s" % (label, st)); return None, None, st
-              items, cursor = listing_of(html)
-              print("%-46s http=%s items=%d cursor=%s" % (label, st, len(items), (cursor or '')[:40]))
-              print("    titles: %s" % json.dumps([i['title'] for i in items[:12]]))
-              return items, cursor, st
-          base = 'https://www.zedge.net'
-          # rotation baseline: bare landing twice
-          b1, _, _ = show('landing bare #1', base + '/wallpapers')
-          b2, _, _ = show('landing bare #2', base + '/wallpapers')
-          if b1 and b2:
-              print("    rotation: |#1 vs #2| shared=%d of %d" % (len(set(i['id'] for i in b1) & set(i['id'] for i in b2)), len(b1)))
-          # keyword filter verdicts
-          kw_wolf, cur_wolf, _ = show('landing ?keywords=wolf', base + '/wallpapers?keywords=wolf')
-          kw_sharma, cur_sharma, _ = show('landing ?keywords=neha%20sharma', base + '/wallpapers?keywords=neha%20sharma')
-          kw_sharma2, _, _ = show('landing ?keywords=Neha+Sharma #2', base + '/wallpapers?keywords=Neha+Sharma')
-          if kw_sharma and kw_sharma2:
-              print("    kw stability: shared=%d of %d" % (len(set(i['id'] for i in kw_sharma) & set(i['id'] for i in kw_sharma2)), len(kw_sharma)))
-          # the site's own search route for comparison
-          find_items, find_cursor, _ = show('find /find/wallpapers/neha%20sharma', base + '/find/wallpapers/neha%20sharma')
-          if kw_sharma and find_items:
-              shared = len(set(i['id'] for i in kw_sharma) & set(i['id'] for i in find_items))
-              print("    kw-vs-find shared first page: %d" % shared)
-          # cursor walk on the keywords route
-          if kw_sharma and cur_sharma:
-              st2, html2 = get(base + '/wallpapers?keywords=neha%20sharma&cursor=' + urllib.parse.quote(cur_sharma, safe=''))
-              items2, cursor2 = (listing_of(html2) if st2 == 200 else ([], None))
-              fresh = [i for i in items2 if i['id'] not in set(x['id'] for x in kw_sharma)]
-              echo = (cursor2 == cur_sharma)
-              print("kw cursor walk: http=%s items=%d fresh=%d echo=%s next=%s" % (st2, len(items2), len(fresh), echo, (cursor2 or '')[:40]))
-              print("    page2 titles: %s" % json.dumps([i['title'] for i in items2[:12]]))
-              # one more hop to prove a real chain
-              if fresh and cursor2 and not echo:
-                  st3, html3 = get(base + '/wallpapers?keywords=neha%20sharma&cursor=' + urllib.parse.quote(cursor2, safe=''))
-                  items3, cursor3 = (listing_of(html3) if st3 == 200 else ([], None))
-                  seen = set(x['id'] for x in kw_sharma) | set(x['id'] for x in items2)
-                  fresh3 = [i for i in items3 if i['id'] not in seen]
-                  print("kw cursor walk p3: http=%s items=%d fresh=%d" % (st3, len(items3), len(fresh3)))
-          # category route keyword echo, for the record (search route ignores cursor)
-          if find_items and find_cursor:
-              stc, htmlc = get(base + '/find/wallpapers/neha%20sharma?cursor=' + urllib.parse.quote(find_cursor, safe=''))
-              itemsc, cursorc = (listing_of(htmlc) if stc == 200 else ([], None))
-              sharedc = len(set(i['id'] for i in itemsc) & set(i['id'] for i in find_items))
-              print("find cursor walk: http=%s items=%d shared-with-p1=%d echo=%s" % (stc, len(itemsc), sharedc, cursorc == find_cursor))
+          allc = json.load(open('/tmp/all_inputs.json'))
+          # find the find-route post with a cursor
+          qdoc, inp = None, None
+          for a in allc:
+              if 'find' in a['target']:
+                  for p in a['posts']:
+                      try:
+                          j = json.loads(p)
+                          if (j.get('variables') or {}).get('input', {}).get('next'):
+                              qdoc, inp = j['query'], j['variables']['input']
+                      except Exception: pass
+          if not qdoc:
+              print("no captured find post with cursor"); raise SystemExit
+          body = json.dumps({'query': qdoc, 'variables': {'input': inp}}).encode()
+          req = urllib.request.Request('https://www.zedge.net/api/graphql', data=body, method='POST',
+              headers={'User-Agent': UA, 'Content-Type': 'application/json', 'Accept': '*/*'})
+          try:
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  rb = json.loads(r.read().decode())
+                  items = rb['data']['browse_filteredList']['items']
+                  print("bare POST replay (no cookies): http=%s items=%d next=%s" % (r.status, len(items), (rb['data']['browse_filteredList'].get('next') or '')[:50]))
+                  print("first item keys:", sorted(items[0].keys()))
+                  print("meta keys:", sorted((items[0].get('meta') or {}).keys()))
+          except urllib.error.HTTPError as e:
+              print("bare POST replay: http=%s body[:300]=%s" % (e.code, e.read().decode('utf-8','replace')[:300]))
+          except Exception as e:
+              print("bare POST replay: ERR", e)
           PY
-          python3 /tmp/kw.py 2>&1 | head -60
+          python3 /tmp/replay.py 2>&1 | head -20
