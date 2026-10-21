@@ -9,23 +9,31 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe zedge.net search grammar from a clean network
+      - name: Probe the continuation grammar (v2)
         run: |
           set +e
-          cat > /tmp/probe.py <<'PY'
+          cat > /tmp/probe2.py <<'PY'
           import re, json, subprocess, urllib.parse
 
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
           UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
-          def get(url, out="/tmp/t.html"):
-              subprocess.run(["curl","-sL","-A",UA,"-H","Accept: text/html,application/xhtml+xml",
-                               "--max-time","90","-o",out,"-w","%{http_code}",url],
-                              capture_output=True, text=True)
+          def get(url, out="/tmp/t.html", headers=None):
+              args = ["curl","-sL","-A",UA,"--max-time","90","-D","/tmp/h.txt","-o",out,"-w","%{http_code}",url]
+              for k, v in (headers or {}).items():
+                  args[len(args)-2:len(args)-2] = ["-H", k + ": " + v]
+              code = subprocess.run(args, capture_output=True, text=True).stdout.strip()
               try:
-                  return open(out, encoding="utf-8", errors="replace").read()
+                  body = open(out, encoding="utf-8", errors="replace").read()
               except Exception:
-                  return ""
+                  body = ""
+              ct = ""
+              try:
+                  for line in open("/tmp/h.txt", encoding="utf-8", errors="replace"):
+                      if line.lower().startswith("content-type:"): ct = line.strip()
+              except Exception:
+                  pass
+              return code, ct, body
 
           def flight_of(html):
               out = []
@@ -52,127 +60,92 @@ jobs:
                           if depth == 0: return text[start:i+1]
               return None
 
-          def report(name, url):
-              html = get(url, "/tmp/%s.html" % name)
-              cf = "CF-CHALLENGED" if "Just a moment" in html else "ok"
-              print("=== %s | %s | %d bytes | %s" % (name, url, len(html), cf))
-              if "Just a moment" in html: return None
+          def ids_of(text):
+              # unescaped (raw flight / json) AND escaped (html-embedded) forms
+              found = re.findall(r'\\?"id\\?":\\?"(%s)\\?"' % UUID, text)
+              seen = []
+              for x in found:
+                  if x not in seen: seen.append(x)
+              return seen
+
+          def cursors_of(text):
+              raw = re.findall(r'\\?"next\\?":\\?"([^"\\]{20,500})\\?"', text)
+              return [x.replace("\\u003d","=").replace("\\u0026","&") for x in raw]
+
+          def listing_state(html):
               fl = flight_of(html)
-              print("flight length: %d" % len(fl))
-              ids = re.findall('"id":"(%s)"' % UUID, html)
-              print("uuid ids in html: %d (first: %s)" % (len(ids), ids[:2]))
-              # searchInitialData sections
-              for m in re.finditer(r'"searchInitialData":', fl):
-                  arr = slice_balanced(fl, m.end())
-                  if not arr: continue
-                  try: sections = json.loads(arr)
-                  except Exception as e:
-                      print("searchInitialData parse fail:", e); continue
-                  print("searchInitialData: %d sections" % len(sections))
-                  for s in sections:
-                      if isinstance(s, dict):
-                          print("  section keys=%s type=%s items=%s" % (
-                              sorted(s.keys()), s.get("type"),
-                              len(s.get("items", [])) if isinstance(s.get("items"), list) else None))
-              # initialData objects
+              ids, curs = [], []
               for m in re.finditer(r'"initialData":', fl):
                   obj = slice_balanced(fl, m.end())
                   if not obj: continue
                   try: d = json.loads(obj)
                   except Exception: continue
-                  if not isinstance(d, dict): continue
-                  keys = sorted(d.keys())
-                  if "pages" in d:
-                      pages = d["pages"] if isinstance(d["pages"], list) else []
-                      n_items = sum(len(p.get("items", [])) for p in pages if isinstance(p, dict))
-                      nexts = [p.get("next") for p in pages if isinstance(p, dict)]
-                      print("initialData LISTING: keys=%s pages=%d items=%d next=%s" % (
-                          keys, len(pages), n_items, [str(n)[:50] for n in nexts]))
-                  elif "shareUrl" in d:
-                      print("initialData DETAIL: keys=%s" % keys)
-                  else:
-                      print("initialData other: keys=%s" % keys)
-              return html
+                  if isinstance(d, dict) and isinstance(d.get("pages"), list):
+                      for p in d["pages"]:
+                          if isinstance(p, dict):
+                              for it in p.get("items", []):
+                                  if isinstance(it, dict) and it.get("id"): ids.append(it["id"])
+                              if p.get("next"): curs.append(p["next"])
+              return fl, ids, curs
 
-          pages = {}
-          for name, url in [
+          RSC = {"RSC": "1", "Accept": "text/x-component"}
+          for name, base in [
               ("wswolf", "https://www.zedge.net/find/wallpapers/wolf"),
-              ("wsshark", "https://www.zedge.net/find/wallpapers/great%20white%20shark"),
-              ("mixedwolf", "https://www.zedge.net/find/wolf"),
               ("landing", "https://www.zedge.net/wallpapers"),
-              ("categoryanime", "https://www.zedge.net/category/wallpapers/anime"),
           ]:
-              pages[name] = report(name, url)
-
-          # cursor walk tests on pages that carried a pages[].next cursor
-          for name in ("wswolf", "landing", "categoryanime"):
-              html = pages.get(name)
-              if not html: continue
-              fl = flight_of(html)
-              cur = None
-              for m in re.finditer(r'"initialData":', fl):
-                  obj = slice_balanced(fl, m.end())
-                  if not obj: continue
-                  try: d = json.loads(obj)
-                  except Exception: continue
-                  if isinstance(d, dict) and isinstance(d.get("pages"), list) and d["pages"]:
-                      last = d["pages"][-1]
-                      if isinstance(last, dict) and last.get("next"):
-                          cur = last["next"]; break
-              if not cur:
-                  # try a section-level next on searchInitialData
-                  for m in re.finditer(r'"searchInitialData":', fl):
-                      arr = slice_balanced(fl, m.end())
-                      if not arr: continue
-                      try: sections = json.loads(arr)
-                      except Exception: continue
-                      for s in sections if isinstance(sections, list) else []:
-                          if isinstance(s, dict) and s.get("next"):
-                              cur = s["next"]; break
-                      if cur: break
-              if not cur:
-                  print("== %s: NO cursor found anywhere" % name)
-              else:
-                  print("== %s cursor: %s" % (name, cur[:70]))
-                  base = {"wswolf": "https://www.zedge.net/find/wallpapers/wolf",
-                          "landing": "https://www.zedge.net/wallpapers",
-                          "categoryanime": "https://www.zedge.net/category/wallpapers/anime"}[name]
-                  enc = urllib.parse.quote(cur, safe="")
-                  i1 = re.findall('"id":"(%s)"' % UUID, html)
-                  for label, qs in [("cursor+page", "?cursor=%s&page=2" % enc),
-                                    ("cursor-only", "?cursor=%s" % enc),
-                                    ("page-only", "?page=2")]:
-                      h2 = get(base + qs, "/tmp/%s_%s.html" % (name, label.replace("+","_")))
-                      i2 = re.findall('"id":"(%s)"' % UUID, h2)
-                      cf = "CF" if "Just a moment" in h2 else "-"
-                      ov = len(set(i1[:20]) & set(i2[:20]))
-                      same = "IDENTICAL" if h2 == html else "differs"
-                      print("  [%s] %s: ids %d -> %d | overlap(first20)=%d | %s" % (
-                          label, cf, len(i1), len(i2), ov, same))
+              code, ct, html = get(base, "/tmp/%s.html" % name)
+              fl, ids1, curs = listing_state(html)
+              print("== %s: http=%s bytes=%d ct=%s" % (name, code, len(html), ct))
+              print("   page1 ids=%d first=%s" % (len(ids1), ids1[:2]))
+              print("   page1 cursors=%d c1=%s" % (len(curs), (curs[0][:60] + "...") if curs else None))
+              if not curs:
+                  print("   NO CURSOR - skipping walk"); continue
+              c1 = curs[0]
+              enc = urllib.parse.quote(c1, safe="")
+              for label, url, hdrs in [
+                  ("ssr cursor+page", base + "?cursor=%s&page=2" % enc, None),
+                  ("ssr cursor-only", base + "?cursor=%s" % enc, None),
+                  ("rsc cursor+page", base + "?cursor=%s&page=2" % enc, RSC),
+                  ("rsc cursor-only", base + "?cursor=%s" % enc, RSC),
+                  ("rsc _rsc+cursor", base + "?_rsc=zzz&cursor=%s" % enc, RSC),
+                  ("rsc bare", base + "?_rsc=zzz", RSC),
+              ]:
+                  code2, ct2, body = get(url, "/tmp/walk.html", hdrs)
+                  fl2, ids2, curs2 = listing_state(body)
+                  raw_ids2 = ids_of(body)
+                  echo = (curs2[:1] == [c1])
+                  ov = len(set(ids1[:20]) & set(ids2[:20]))
+                  print("   [%s] http=%s ct=%s | flightids=%d rawids=%d | overlap20=%d | cursors=%s | ECHO=%s" % (
+                      label, code2, ct2.strip()[:40], len(ids2), len(raw_ids2), ov,
+                      [c[:30] for c in curs2[:2]], echo))
+                  if ids2 and ov == 0:
+                      print("      >>> ADVANCED! fresh ids: %s" % ids2[:3])
+                  if not ids2 and raw_ids2:
+                      print("      raw body sample: %s" % body[:300].replace("\n"," ")[:300])
           PY
-          python3 /tmp/probe.py
-      - name: Dump raw flight grammar snippets
+          python3 /tmp/probe2.py
+      - name: Read the Load-more grammar from the site's own client chunks
         run: |
           set +e
-          echo "=== searchInitialData section start (wswolf) ==="
-          grep -oE 'searchInitialData.{0,260}' /tmp/wswolf.html | head -2
-          echo ""
-          echo "=== section-level fields after WALLPAPER items (wswolf) ==="
-          grep -oE '"type":"WALLPAPER".{0,100}' /tmp/wswolf.html | head -3
-          echo ""
-          echo "=== all next-cursor-shaped strings (wswolf) ==="
-          grep -oE '"next":"[^"]{20,400}"' /tmp/wswolf.html | head -6
-          echo ""
-          echo "=== chunk URLs on wallpapers-only page ==="
-          grep -oE 'static/chunks/[^"\\]+\.js' /tmp/wswolf.html | sort -u | grep -Ei 'find|search|page' | head -10
-          echo ""
-          echo "=== fetch find/search page chunks and grep continuation grammar ==="
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          for c in $(grep -oE 'static/chunks/app/[^"\\]+\.js' /tmp/wswolf.html | grep -Ei 'find|search' | head -3); do
-            echo "--- chunk: $c"
-            curl -sL -A "$UA" --max-time 60 -o /tmp/chunk.js "https://www.zedge.net/_next/$c"
-            echo "    size: $(wc -c < /tmp/chunk.js)"
-            grep -oE '.{0,80}(cursor|loadMore|load-more|Load More|Load more).{0,80}' /tmp/chunk.js | head -12
-            grep -oE '[?&](cursor|page|after|offset|start|from|continuation)=[^"]{0,40}' /tmp/chunk.js | sort -u | head -12
-            grep -oE '.{0,60}/api/[a-zA-Z0-9/_-]+.{0,60}' /tmp/chunk.js | head -10
+          echo "=== ALL chunk URLs on the wallpapers-search page ==="
+          grep -oE 'static/chunks/[^"\\]+\.js' /tmp/wswolf.html | sort -u | head -60
+          echo ""
+          mkdir -p /tmp/chunks && cd /tmp/chunks
+          i=0
+          for c in $(grep -oE 'static/chunks/[^"\\]+\.js' /tmp/wswolf.html | sort -u); do
+            i=$((i+1))
+            curl -sL -A "$UA" --max-time 60 -o "c$i.js" "https://www.zedge.net/_next/$c" 2>/dev/null
+            printf "%s -> %s bytes\n" "$c" "$(wc -c < c$i.js)"
+          done
+          echo ""
+          echo "=== continuation grammar greps over all chunks ==="
+          grep -l "fetchNextPage\|getNextPageParam\|pageParam" *.js 2>/dev/null
+          for f in $(grep -l "fetchNextPage\|getNextPageParam\|pageParam" *.js 2>/dev/null | head -4); do
+            echo "--- $f"
+            grep -oE '.{0,90}pageParam.{0,90}' "$f" | head -8
+            grep -oE '.{0,90}fetchNextPage.{0,90}' "$f" | head -6
+            grep -oE '.{0,110}(cursor|after)=.{0,110}' "$f" | head -8
+            grep -oE '.{0,80}/api/[a-zA-Z0-9/_{}.-]+.{0,80}' "$f" | head -8
+            grep -oE '.{0,80}(searchZedge|zedgeSearch|/find/).{0,80}' "$f" | head -6
           done
