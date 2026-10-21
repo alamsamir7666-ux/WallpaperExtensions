@@ -9,143 +9,99 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe the continuation grammar (v2)
+      - name: Capture the real Load-more request with Chrome
         run: |
           set +e
-          cat > /tmp/probe2.py <<'PY'
-          import re, json, subprocess, urllib.parse
-
-          UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-
-          def get(url, out="/tmp/t.html", headers=None):
-              args = ["curl","-sL","-A",UA,"--max-time","90","-D","/tmp/h.txt","-o",out,"-w","%{http_code}",url]
-              for k, v in (headers or {}).items():
-                  args[len(args)-2:len(args)-2] = ["-H", k + ": " + v]
-              code = subprocess.run(args, capture_output=True, text=True).stdout.strip()
-              try:
-                  body = open(out, encoding="utf-8", errors="replace").read()
-              except Exception:
-                  body = ""
-              ct = ""
-              try:
-                  for line in open("/tmp/h.txt", encoding="utf-8", errors="replace"):
-                      if line.lower().startswith("content-type:"): ct = line.strip()
-              except Exception:
-                  pass
-              return code, ct, body
-
-          def flight_of(html):
-              out = []
-              for m in re.finditer(r'self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)', html):
-                  try:
-                      out.append(json.loads('"' + m.group(1) + '"'))
-                  except Exception:
-                      pass
-              return "".join(out)
-
-          def slice_balanced(text, start):
-              depth = 0; instr = False; esc = False
-              for i in range(start, len(text)):
-                  c = text[i]
-                  if instr:
-                      if esc: esc = False
-                      elif c == "\\": esc = True
-                      elif c == '"': instr = False
-                  else:
-                      if c == '"': instr = True
-                      elif c in "{[": depth += 1
-                      elif c in "}]" :
-                          depth -= 1
-                          if depth == 0: return text[start:i+1]
-              return None
-
-          def ids_of(text):
-              # unescaped (raw flight / json) AND escaped (html-embedded) forms
-              found = re.findall(r'\\?"id\\?":\\?"(%s)\\?"' % UUID, text)
-              seen = []
-              for x in found:
-                  if x not in seen: seen.append(x)
-              return seen
-
-          def cursors_of(text):
-              raw = re.findall(r'\\?"next\\?":\\?"([^"\\]{20,500})\\?"', text)
-              return [x.replace("\\u003d","=").replace("\\u0026","&") for x in raw]
-
-          def listing_state(html):
-              fl = flight_of(html)
-              ids, curs = [], []
-              for m in re.finditer(r'"initialData":', fl):
-                  obj = slice_balanced(fl, m.end())
-                  if not obj: continue
-                  try: d = json.loads(obj)
-                  except Exception: continue
-                  if isinstance(d, dict) and isinstance(d.get("pages"), list):
-                      for p in d["pages"]:
-                          if isinstance(p, dict):
-                              for it in p.get("items", []):
-                                  if isinstance(it, dict) and it.get("id"): ids.append(it["id"])
-                              if p.get("next"): curs.append(p["next"])
-              return fl, ids, curs
-
-          RSC = {"RSC": "1", "Accept": "text/x-component"}
-          for name, base in [
-              ("wswolf", "https://www.zedge.net/find/wallpapers/wolf"),
-              ("landing", "https://www.zedge.net/wallpapers"),
-          ]:
-              code, ct, html = get(base, "/tmp/%s.html" % name)
-              fl, ids1, curs = listing_state(html)
-              print("== %s: http=%s bytes=%d ct=%s" % (name, code, len(html), ct))
-              print("   page1 ids=%d first=%s" % (len(ids1), ids1[:2]))
-              print("   page1 cursors=%d c1=%s" % (len(curs), (curs[0][:60] + "...") if curs else None))
-              if not curs:
-                  print("   NO CURSOR - skipping walk"); continue
-              c1 = curs[0]
-              enc = urllib.parse.quote(c1, safe="")
-              for label, url, hdrs in [
-                  ("ssr cursor+page", base + "?cursor=%s&page=2" % enc, None),
-                  ("ssr cursor-only", base + "?cursor=%s" % enc, None),
-                  ("rsc cursor+page", base + "?cursor=%s&page=2" % enc, RSC),
-                  ("rsc cursor-only", base + "?cursor=%s" % enc, RSC),
-                  ("rsc _rsc+cursor", base + "?_rsc=zzz&cursor=%s" % enc, RSC),
-                  ("rsc bare", base + "?_rsc=zzz", RSC),
-              ]:
-                  code2, ct2, body = get(url, "/tmp/walk.html", hdrs)
-                  fl2, ids2, curs2 = listing_state(body)
-                  raw_ids2 = ids_of(body)
-                  echo = (curs2[:1] == [c1])
-                  ov = len(set(ids1[:20]) & set(ids2[:20]))
-                  print("   [%s] http=%s ct=%s | flightids=%d rawids=%d | overlap20=%d | cursors=%s | ECHO=%s" % (
-                      label, code2, ct2.strip()[:40], len(ids2), len(raw_ids2), ov,
-                      [c[:30] for c in curs2[:2]], echo))
-                  if ids2 and ov == 0:
-                      print("      >>> ADVANCED! fresh ids: %s" % ids2[:3])
-                  if not ids2 and raw_ids2:
-                      print("      raw body sample: %s" % body[:300].replace("\n"," ")[:300])
-          PY
-          python3 /tmp/probe2.py
-      - name: Read the Load-more grammar from the site's own client chunks
+          sudo npm install -g puppeteer-core --silent 2>&1 | tail -1
+          cat > /tmp/capture.js <<'JS'
+          const puppeteer = require('puppeteer-core');
+          (async () => {
+            const browser = await puppeteer.launch({
+              executablePath: '/usr/bin/google-chrome',
+              headless: 'new',
+              args: ['--no-sandbox', '--disable-dev-shm-usage', '--window-size=1280,2000'],
+            });
+            const page = await browser.newPage();
+            await page.setViewport({width: 1280, height: 2000});
+            const captured = [];
+            const push = (phase, r) => captured.push({
+              phase, url: r.url().slice(0, 400), method: r.method(),
+              type: r.resourceType(),
+              post: (r.postData() || '').slice(0, 600),
+              headers: Object.fromEntries(Object.entries(r.headers()).filter(([k]) =>
+                ['next-action','rsc','next-router-state-tree','content-type','accept'].includes(k))),
+            });
+            page.on('request', r => { if (r.url().includes('zedge.net') && !/\.(js|css|png|svg|woff2?|ico|mp4|webp)/.test(r.url())) push('request', r); });
+            const target = process.argv[2] || 'https://www.zedge.net/find/wallpapers/wolf';
+            console.log('GOTO', target);
+            try {
+              await page.goto(target, {waitUntil: 'networkidle2', timeout: 90000});
+            } catch (e) { console.log('goto err', e.message); }
+            await new Promise(r => setTimeout(r, 4000));
+            console.log('TITLE:', await page.title());
+            console.log('CF challenge?', (await page.content()).includes('Just a moment'));
+            // scroll to bottom to surface lazy Load-more
+            for (let i = 0; i < 6; i++) { await page.evaluate(() => window.scrollBy(0, 1500)); await new Promise(r => setTimeout(r, 700)); }
+            const btn = await page.evaluateHandle(() => {
+              const all = [...document.querySelectorAll('button, a, [role="button"], div, span')];
+              return all.find(e => /load more|show more|see more|more wallpapers/i.test((e.textContent || '') + (e.getAttribute && e.getAttribute('aria-label') || '')));
+            });
+            const el = btn && btn.asElement();
+            console.log('LOADMORE ELEMENT:', el ? (await el.evaluate(n => n.outerHTML.slice(0, 400))) : 'NOT FOUND');
+            if (el) {
+              await el.scrollIntoView();
+              await new Promise(r => setTimeout(r, 1000));
+              try { await el.click(); console.log('CLICKED'); } catch (e) { console.log('click err', e.message); }
+              await new Promise(r => setTimeout(r, 8000));
+            }
+            const tiles1 = await page.evaluate(() => document.querySelectorAll('a[href*="/wallpaper/"]').length);
+            console.log('TILE LINKS AFTER:', tiles1);
+            console.log('=== CAPTURED REQUESTS ===');
+            for (const c of captured) console.log(JSON.stringify(c));
+            const flight = await page.evaluate(() => {
+              const s = [...document.querySelectorAll('script')].map(x => x.textContent).join('');
+              const m = s.match(/"next":"([^"]{20,300})"/);
+              return m ? m[1] : null;
+            });
+            console.log('PAGE1 FLIGHT CURSOR:', flight);
+            await browser.close();
+          })().catch(e => { console.error('FATAL', e); process.exit(1); });
+          JS
+          NODE_PATH=$(npm root -g) node /tmp/capture.js "https://www.zedge.net/find/wallpapers/wolf" 2>&1 | head -80
+      - name: Deep-read the infinite-query chunk
         run: |
           set +e
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          echo "=== ALL chunk URLs on the wallpapers-search page ==="
-          grep -oE 'static/chunks/[^"\\]+\.js' /tmp/wswolf.html | sort -u | head -60
-          echo ""
+          curl -sL -A "$UA" --max-time 90 -o /tmp/wswolf.html "https://www.zedge.net/find/wallpapers/wolf"
           mkdir -p /tmp/chunks && cd /tmp/chunks
-          i=0
           for c in $(grep -oE 'static/chunks/[^"\\]+\.js' /tmp/wswolf.html | sort -u); do
-            i=$((i+1))
-            curl -sL -A "$UA" --max-time 60 -o "c$i.js" "https://www.zedge.net/_next/$c" 2>/dev/null
-            printf "%s -> %s bytes\n" "$c" "$(wc -c < c$i.js)"
+            n=$(echo "$c" | md5sum | cut -c1-8)
+            curl -sL -A "$UA" --max-time 60 -o "$n.js" "https://www.zedge.net/_next/$c" 2>/dev/null
           done
-          echo ""
-          echo "=== continuation grammar greps over all chunks ==="
-          grep -l "fetchNextPage\|getNextPageParam\|pageParam" *.js 2>/dev/null
-          for f in $(grep -l "fetchNextPage\|getNextPageParam\|pageParam" *.js 2>/dev/null | head -4); do
-            echo "--- $f"
-            grep -oE '.{0,90}pageParam.{0,90}' "$f" | head -8
-            grep -oE '.{0,90}fetchNextPage.{0,90}' "$f" | head -6
-            grep -oE '.{0,110}(cursor|after)=.{0,110}' "$f" | head -8
-            grep -oE '.{0,80}/api/[a-zA-Z0-9/_{}.-]+.{0,80}' "$f" | head -8
-            grep -oE '.{0,80}(searchZedge|zedgeSearch|/find/).{0,80}' "$f" | head -6
-          done
+          echo "chunks: $(ls | wc -l)"
+          cat > /tmp/deep.py <<'PY'
+          import glob, re
+          for f in glob.glob('/tmp/chunks/*.js'):
+              try: src = open(f, encoding='utf-8', errors='replace').read()
+              except Exception: continue
+              if 'useInfiniteQuery' not in src and 'pageParam' not in src: continue
+              if 'queryKey' not in src: continue
+              for m in re.finditer(r'queryFn[^}]{0,120}pageParam[^}]{0,120}', src):
+                  print('FILE', f)
+                  a = max(0, m.start() - 1200)
+                  print('--- queryFn context ---')
+                  print(src[a:m.end() + 1200])
+                  print('--- end ---')
+          # hunt the fetch implementation the hook calls: look for fetch( with json/api/graphql markers
+          for f in glob.glob('/tmp/chunks/*.js'):
+              src = open(f, encoding='utf-8', errors='replace').read()
+              for m in re.finditer(r'fetch\(', src):
+                  a = max(0, m.start() - 500)
+                  seg = src[a:m.end() + 700]
+                  if re.search(r'(next|cursor|page|graphql|api\.zedge|/api/)', seg, re.I):
+                      print('FETCH in', f)
+                      print(seg)
+                      print('=== fetch context end ===')
+                      break
+          PY
+          python3 /tmp/deep.py 2>&1 | head -120
