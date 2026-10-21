@@ -72,6 +72,20 @@ class ZedgeWallpaperProviderTest {
     private val peopleUrl = "https://www.zedge.net/category/wallpapers/people"
     private val findNatureUrl = "https://www.zedge.net/find/nature"
 
+    /** The cursor continuations the provider builds for the captured walks. */
+    private val page2Url =
+        "https://www.zedge.net/wallpapers?cursor=X3Njb3JlPTAuMHxmaXJzdFB1Ymxpc2hlZEF0PTE3OTI1NDc3MzIw" +
+            "MDB8aWQ9YzY3YmJiYzgtNzgzOS00Njk5LWIyYmUtYjlmMmMxNjA0MGVkfF9wcmVmZXJlbmNlPTUwMDI0" +
+            "YWUxLWFjNzMtNGU3Yy04YmY4LTczNDc4NWFiNDVlZQ%3D%3D&page=2"
+    private val page3Url =
+        "https://www.zedge.net/wallpapers?cursor=X3Njb3JlPTAuMHxmaXJzdFB1Ymxpc2hlZEF0PTE3ODk5OTAwMDAw" +
+            "MDB8aWQ9MmUwYTdjMWQtOWYzYi00YTZlLThkMmMtN2IxZTVmOWEzZDQwfF9wcmVmZXJlbmNlPTUwMDI0" +
+            "YWUxLWFjNzMtNGU3Yy04YmY4LTczNDc4NWFiNDVlZQ%3D%3D&page=3"
+    private val animePage2Url =
+        "https://www.zedge.net/category/wallpapers/anime?cursor=X3Njb3JlPTUxNC44NDg2fGZpcnN0UHVibGlz" +
+            "aGVkQXQ9MTc5MTY0NDQ2MjAwMHxpZD1mNzJjZDY5Ni1kNDg5LTQ3YTUtODVlMi03ZTM1NWI4YzU0MWR8" +
+            "X3ByZWZlcmVuY2U9MWNlMGU0YjAtNGZkYi00OGY0LWFiYzUtZTgyZjZlZDJjMjRi&page=2"
+
     /** The live site's routes wired to the real captures. */
     private fun liveRoutes(): Map<String, ProviderHttpResponse> =
         mapOf(
@@ -95,7 +109,7 @@ class ZedgeWallpaperProviderTest {
             assertEquals(6, page.wallpapers.size)
             assertEquals("bf8bf5af-c88f-47b1-8b88-efe39c371c07", page.wallpapers[0].id)
             assertEquals("Winter Escape", page.wallpapers[0].title)
-            assertNull("single-page listings never fake depth", page.nextPage)
+            assertEquals("the landing states its own continuation", 2, page.nextPage)
         }
 
     @Test
@@ -120,7 +134,7 @@ class ZedgeWallpaperProviderTest {
         }
 
     @Test
-    fun aPagePastTheFirstIsTheHonestEmptyWithoutAFetch() =
+    fun aColdPageBeyondTheChainIsTheHonestEmptyWithoutAFetch() =
         runTest {
             val client = configureWith(liveRoutes())
 
@@ -128,7 +142,87 @@ class ZedgeWallpaperProviderTest {
 
             assertTrue(page.wallpapers.isEmpty())
             assertNull(page.nextPage)
-            assertTrue("a page the URL cannot address is never requested", client.requests.isEmpty())
+            assertTrue("a page no cursor addresses is never requested", client.requests.isEmpty())
+        }
+
+    @Test
+    fun theCursorChainWalksTheSitesContinuations() =
+        runTest {
+            val client =
+                configureWith(
+                    liveRoutes() +
+                        mapOf(
+                            page2Url to ok(ZedgeTestPages.landingPage2),
+                            page3Url to ok(ZedgeTestPages.landingPage3),
+                        ),
+                )
+
+            val first = provider.popular(page = 1).getOrThrow()
+            assertEquals(6, first.wallpapers.size)
+            assertEquals(2, first.nextPage)
+
+            val second = provider.popular(page = 2).getOrThrow()
+            assertEquals(listOf(landingUrl, page2Url), client.requests)
+            assertEquals(3, second.wallpapers.size)
+            assertEquals("Aurora Ridge", second.wallpapers[0].title)
+            assertEquals("an advancing page states the next one", 3, second.nextPage)
+
+            val third = provider.popular(page = 3).getOrThrow()
+            assertEquals(listOf(landingUrl, page2Url, page3Url), client.requests)
+            assertEquals(2, third.wallpapers.size)
+            assertEquals("Neon Alley", third.wallpapers[0].title)
+            assertNull("the walk's last page states no continuation", third.nextPage)
+        }
+
+    @Test
+    fun aServerThatIgnoresTheCursorIsTheHonestEmptyNotARepeat() =
+        runTest {
+            // The continuation URL has no route of its own, so it falls to
+            // the landing prefix — an ignoring server re-serves the very
+            // page the cursor came from, and its identical `next` marker is
+            // the echo the guard detects.
+            val client = configureWith(liveRoutes())
+
+            val first = provider.popular(page = 1).getOrThrow()
+            assertEquals(2, first.nextPage)
+
+            val second = provider.popular(page = 2).getOrThrow()
+
+            assertEquals(listOf(landingUrl, page2Url), client.requests)
+            assertTrue("an echoed page never repeats its tiles", second.wallpapers.isEmpty())
+            assertNull(second.nextPage)
+        }
+
+    @Test
+    fun aPageOfPureDupsIsTheHonestEmptyEvenWithAFreshCursor() =
+        runTest {
+            val client =
+                configureWith(liveRoutes() + (page2Url to ok(ZedgeTestPages.landingRecycled)))
+
+            provider.popular(page = 1).getOrThrow()
+            val second = provider.popular(page = 2).getOrThrow()
+
+            assertEquals(listOf(landingUrl, page2Url), client.requests)
+            assertTrue("recycled tiles never serve twice", second.wallpapers.isEmpty())
+            assertNull(second.nextPage)
+        }
+
+    @Test
+    fun everyCategoryWalksItsOwnChain() =
+        runTest {
+            val client =
+                configureWith(liveRoutes() + (animePage2Url to ok(ZedgeTestPages.landingPage2)))
+
+            provider.popular(page = 1, filters = Filters.of("category" to "anime")).getOrThrow()
+            val second = provider.popular(page = 2, filters = Filters.of("category" to "anime")).getOrThrow()
+
+            assertEquals(
+                "a category continuation asks the CATEGORY route for the CATEGORY cursor",
+                listOf(animeUrl, animePage2Url),
+                client.requests,
+            )
+            assertEquals("Aurora Ridge", second.wallpapers.first().title)
+            assertEquals(3, second.nextPage)
         }
 
     @Test
@@ -308,7 +402,7 @@ class ZedgeWallpaperProviderTest {
     fun theMetaStatesTheFlatDoctrine() {
         assertEquals("cloudimage.zedge", provider.meta.id)
         assertEquals("Zedge", provider.meta.name)
-        assertEquals("1.1.0", provider.meta.versionName)
+        assertEquals("1.2.0", provider.meta.versionName)
         assertEquals(
             setOf(Capability.POPULAR, Capability.SEARCH, Capability.TAGS, Capability.FILTERS),
             provider.capabilities,

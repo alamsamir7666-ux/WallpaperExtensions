@@ -23,7 +23,11 @@ import kotlinx.serialization.json.JsonPrimitive
  *   `initialData.pages[].items[]` — arrays of item records, each with
  *   its stable UUID `id`, `title`, `type` and a `meta` of signed
  *   `is.zobj.net` image renditions (`thumbUrl` the grid crop,
- *   `previewUrl` the bigger rendition the site itself displays);
+ *   `previewUrl` the bigger rendition the site itself displays) —
+ *   and every `pages[]` element closes with a `next` field: the
+ *   base64 keyset cursor (`_score|firstPublishedAt|id|_preference`)
+ *   that continues the listing past its last item, the same marker
+ *   the site's own "Load more" rides;
  * - search (`/find/{query}`) speaks `searchInitialData` — typed sections
  *   (`WALLPAPER`, `DYNAMIC_24H_WALLPAPER`, `RINGTONE`,
  *   `NOTIFICATION_SOUND`, `PROFILE`…), each with its own items; only the
@@ -45,12 +49,24 @@ import kotlinx.serialization.json.JsonPrimitive
  *
  * Zedge is a FLAT directory: every listing resolves straight to single
  * wallpapers behind stable UUID routes — there is no album or collection
- * layer anywhere in the grammar. The one cursor the site offers (a
- * base64 keyset marker in `pages[].next`) is consumed by its own
- * client-side "Load more" XHR, NOT by any URL grammar — `?cursor=` is
- * ignored by the server (verified live: identical page re-served) —
- * so listings parse one honest page and the provider reports
- * `nextPage = null`, never a duplicate to fake depth.
+ * layer anywhere in the grammar. The listing cursor (the base64 keyset
+ * marker in `pages[].next`) is handed to the provider for the URL
+ * continuation it addresses: the page-1 response carries the cursor to
+ * page 2, and the provider asks the server for it as search params on
+ * the same route. The grammar is guarded both ways: a server that
+ * ignores the cursor re-serves the identical listing (the same `next`
+ * marker comes back — the echo is detected, the answer is the honest
+ * empty, never a repeat of the first page to fake depth), and an
+ * advancing page whose items are all dups of what already served is
+ * the honest empty too. [ZedgeParser] only reads what the stream
+ * states; the continuation logic and its guards live in the provider.
+ *
+ * ## Search stays single-page (the honest answer)
+ *
+ * The mixed-content `searchInitialData` sections carry NO cursor
+ * anywhere in the captured grammar — no `next` marker on any section —
+ * so search parses one page and the provider reports `nextPage = null`
+ * for it, the same honesty as before.
  *
  * ## Honesty rules
  *
@@ -77,6 +93,19 @@ internal object ZedgeParser {
         val thumbUrl: String,
         val fullUrl: String,
         val title: String?,
+    )
+
+    /**
+     * One listing page of the site's own SSR state: its wallpaper tiles
+     * in the site's order, deduped by id, and the base64 keyset cursor
+     * that continues the listing (`pages[].next`) — null when the site
+     * states no continuation (the last page of the grid, a page with no
+     * stream, a trimmed response). This is the raw material the
+     * provider's cursor chain rides.
+     */
+    data class ListingPage(
+        val items: List<GridItem>,
+        val nextCursor: String?,
     )
 
     /**
@@ -161,20 +190,34 @@ internal object ZedgeParser {
 
     /**
      * The wallpaper items of a listing page (the landing, a category
-     * page) — the first `initialData` carrying a non-empty `pages`
-     * array, in the site's own order, deduped by id. A page whose
-     * listings are all empty (or that carries no stream at all) parses
-     * to the honest zero.
+     * page) — [parseListing] without the cursor, the shape the
+     * provider's random shuffle feeds on. Kept because it is the
+     * honest read of "just the tiles".
      */
-    fun parseGrid(html: String): List<GridItem> {
+    fun parseGrid(html: String): List<GridItem> = parseListing(html).items
+
+    /**
+     * One listing page whole: the tiles of the first `initialData`
+     * carrying a non-empty `pages` array, in the site's own order,
+     * deduped by id, together with the continuation cursor its last
+     * `pages[]` element states. A page whose listings are all empty (or
+     * that carries no stream at all) parses to the honest zero with no
+     * cursor — and the related-items shell on detail pages (empty
+     * `pages`) never reads as a listing.
+     */
+    fun parseListing(html: String): ListingPage {
         val flight = flightOf(html)
-        val items =
+        val listing =
             valuesOf(flight, "initialData")
                 .mapNotNull { it as? JsonObject }
                 .filter { it.containsKey("pages") }
-                .firstNotNullOfOrNull { listing -> itemsOfListing(listing).takeIf { it.isNotEmpty() } }
-                ?: return emptyList()
-        return items.distinctBy { it.id }
+                .firstNotNullOfOrNull { candidate ->
+                    candidate.takeIf { itemsOfListing(it).isNotEmpty() }
+                } ?: return ListingPage(emptyList(), null)
+        val items = itemsOfListing(listing).distinctBy { it.id }
+        val pages = listing["pages"] as? JsonArray
+        val lastPage = pages?.lastOrNull() as? JsonObject
+        return ListingPage(items, lastPage?.stringOf("next"))
     }
 
     /**

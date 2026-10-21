@@ -57,6 +57,78 @@ class ZedgeParserTest {
     }
 
     @Test
+    fun theLandingStatesTheCursorThatContinuesIt() {
+        val listing = ZedgeParser.parseListing(ZedgeTestPages.landing)
+
+        assertEquals(6, listing.items.size)
+        assertEquals(
+            // The site's own base64 keyset marker, verbatim — the same
+            // cursor its own "Load more" walk rides.
+            "X3Njb3JlPTAuMHxmaXJzdFB1Ymxpc2hlZEF0PTE3OTI1NDc3MzIwMDB8aWQ9YzY3YmJiYzgt" +
+                "NzgzOS00Njk5LWIyYmUtYjlmMmMxNjA0MGVkfF9wcmVmZXJlbmNlPTUwMDI0YWUxLWFjNzMt" +
+                "NGU3Yy04YmY4LTczNDc4NWFiNDVlZQ==",
+            listing.nextCursor,
+        )
+    }
+
+    @Test
+    fun everyListingStatesItsOwnContinuation() {
+        val landingCursor = ZedgeParser.parseListing(ZedgeTestPages.landing).nextCursor
+        val animeCursor = ZedgeParser.parseListing(ZedgeTestPages.animeCategory).nextCursor
+
+        assertTrue(animeCursor!!.startsWith("X3Njb3JlPTUxNC44NDg2fGZpcnN0UHVibGlzaGVkQXQ9MTc5MTY0NDQ2MjAwMH"))
+        assertNotEquals("each route hands its own keyset", landingCursor, animeCursor)
+    }
+
+    @Test
+    fun aCursorHonoringContinuationServesTheNextTiles() {
+        val page2 = ZedgeParser.parseListing(ZedgeTestPages.landingPage2)
+
+        assertEquals(3, page2.items.size)
+        assertEquals("Aurora Ridge", page2.items[0].title)
+        assertEquals("Midnight Bloom", page2.items[1].title)
+        assertNotEquals(
+            "an advancing page hands the NEXT page's cursor",
+            ZedgeParser.parseListing(ZedgeTestPages.landing).nextCursor,
+            page2.nextCursor,
+        )
+    }
+
+    @Test
+    fun theWalksLastPageStatesNoContinuation() {
+        val page3 = ZedgeParser.parseListing(ZedgeTestPages.landingPage3)
+
+        assertEquals(2, page3.items.size)
+        assertEquals("Neon Alley", page3.items[0].title)
+        assertNull(page3.nextCursor)
+    }
+
+    @Test
+    fun theRecycledTilesKeepAFreshLookingCursor() {
+        // The guard case must LOOK advancing: the site's own page-1 tiles
+        // behind a cursor that is NOT the one the landing handed over.
+        val recycled = ZedgeParser.parseListing(ZedgeTestPages.landingRecycled)
+
+        assertEquals(6, recycled.items.size)
+        assertEquals("bf8bf5af-c88f-47b1-8b88-efe39c371c07", recycled.items[0].id)
+        assertNotEquals(
+            ZedgeParser.parseListing(ZedgeTestPages.landing).nextCursor,
+            recycled.nextCursor,
+        )
+    }
+
+    @Test
+    fun aPageTheSiteCannotContinueHasNoCursor() {
+        val emptyShelfListing = ZedgeParser.parseListing(ZedgeTestPages.emptyShelf)
+        assertTrue(emptyShelfListing.items.isEmpty())
+        assertNull(emptyShelfListing.nextCursor)
+
+        val plainListing = ZedgeParser.parseListing(ZedgeTestPages.plainHtml)
+        assertTrue(plainListing.items.isEmpty())
+        assertNull(plainListing.nextCursor)
+    }
+
+    @Test
     fun anEmptyListingParsesToTheHonestZero() {
         assertEquals(0, ZedgeParser.parseGrid(ZedgeTestPages.emptyShelf).size)
     }
@@ -72,6 +144,10 @@ class ZedgeParserTest {
     fun aListingPageServesNoSearchSectionsAndViceVersa() {
         assertEquals(0, ZedgeParser.parseSearch(ZedgeTestPages.landing).size)
         assertEquals(0, ZedgeParser.parseGrid(ZedgeTestPages.search).size)
+        // Search sections carry no listing cursor anywhere — a search
+        // page read as a listing is the honest zero without one.
+        assertTrue(ZedgeParser.parseListing(ZedgeTestPages.search).items.isEmpty())
+        assertNull(ZedgeParser.parseListing(ZedgeTestPages.search).nextCursor)
     }
 
     // -------------------------------------------------------------- search

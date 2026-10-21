@@ -5,6 +5,7 @@ import com.cloudimage.provider.api.ProviderHttpClient
 import com.cloudimage.provider.api.ProviderHttpResponse
 import com.cloudimage.provider.api.ProviderSettings
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -88,12 +89,42 @@ class ZedgeLiveCheckTest {
 
             assertTrue("landing empty", page.wallpapers.isNotEmpty())
             assertTrue("landing shallow: ${page.wallpapers.size}", page.wallpapers.size >= 5)
-            assertNull("landing faked depth", page.nextPage)
+            assertEquals("the landing hides its continuation", 2, page.nextPage)
             page.wallpapers.take(5).forEach { wallpaper ->
                 assertTrue("id not the UUID route id: ${wallpaper.id}", wallpaper.id.length == 36)
                 assertTrue("thumb not the site's rendition: ${wallpaper.thumbUrl}", wallpaper.thumbUrl.startsWith(renditionHost))
                 assertTrue("full not the site's rendition: ${wallpaper.fullUrl}", wallpaper.fullUrl.startsWith(renditionHost))
             }
+        }
+
+    @Test
+    fun theLandingStillStatesItsContinuationCursor() =
+        runTest {
+            assumeTrue(live())
+            configureLive()
+
+            val page = provider.popular(page = 1).getOrThrow()
+
+            assertEquals("page 1 must state its cursor to keep the walk alive", 2, page.nextPage)
+
+            // THE grammar probe: a clean network asks the server for the
+            // cursor page 1 handed over. Either the walk advances — fresh
+            // tiles — or the server ignores the cursor and the guards
+            // answer the honest empty. A REPEAT of page 1's tiles is the
+            // one outcome this must never produce: if it fails here, the
+            // continuation grammar (or the guards) drifted.
+            val second = provider.popular(page = 2).getOrThrow()
+
+            if (second.wallpapers.isNotEmpty()) {
+                val firstIds = page.wallpapers.map { it.id }.toSet()
+                second.wallpapers.forEach { wallpaper ->
+                    assertTrue("page 2 repeated a tile: ${wallpaper.id}", wallpaper.id !in firstIds)
+                }
+            }
+            assertTrue(
+                "the walk must either advance or end honestly — never dangle",
+                second.nextPage == null || second.wallpapers.isNotEmpty(),
+            )
         }
 
     @Test

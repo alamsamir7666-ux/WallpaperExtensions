@@ -60,15 +60,31 @@ import kotlin.random.Random
  * ladder delivered the document (the plain GET's raw HTML and the
  * WebView lane's rendered DOM both keep their script contents).
  *
- * ## Single-page listings (the honest answer)
+ * ## Cursor-chain pagination (v1.2.0)
  *
- * The grids' "Load more" is a client-side cursor XHR the URL cannot
- * express — the `?cursor=` form is ignored by the server (verified
- * live: the identical page re-served) — so every listing answers
- * exactly the one page the site itself renders and reports
- * `nextPage = null`. One page per request, the same politeness the
- * other keyless sources practice, and no duplicated items to fake
- * depth.
+ * The grids' "Load more" is a cursor walk: every listing response
+ * states, in its own flight stream, the base64 keyset cursor that
+ * continues it (`initialData.pages[].next` — the same marker the
+ * site's own client-side walk rides, an Elasticsearch-style
+ * `_score|firstPublishedAt|id|_preference` search-after key). The
+ * provider walks that chain: page 1 is the bare route, and every
+ * deeper page asks the server for the cursor the previous page
+ * handed over, as search params on the same route — the one
+ * grammar a GET can address, and both lanes of the host ladder
+ * deliver it (the plain GET's raw HTML and the WebView lane's
+ * rendered DOM keep their flight scripts either way).
+ *
+ * Two guards keep the chain honest: a server that ignores the
+ * cursor re-serves the identical listing — the same `next` marker
+ * comes back, the echo is detected, and the answer is the honest
+ * empty, never a repeat of the first page to fake depth; and a
+ * page whose items are all dups of what already served is the
+ * honest empty too, even when its cursor looks fresh. A fresh
+ * instance (the host may pool or recreate plugins) re-derives the
+ * chain from page 1 — the host's page walks are sequential by
+ * design (`nextPage`-driven), so the chain is always warm before
+ * it is read. Search stays single-page: its mixed-content sections
+ * carry no cursor anywhere in the captured grammar.
  *
  * ## Images — taken verbatim, never derived
  *
@@ -105,13 +121,14 @@ import kotlin.random.Random
  *
  * ## State
  *
- * The contract asks plugins to be stateless; the only mutable state
- * is the seen-tag pool feeding [suggestTags] — a bonus seeded with
+ * The contract asks plugins to be stateless; the mutable state is
+ * the seen-tag pool feeding [suggestTags] — a bonus seeded with
  * the site's own published category and tag terms (its landing
  * chips), refreshed by tags read off fetched detail pages, never a
- * dependency. A fresh instance answers identically, at worst with
- * suggestions alone. One lock guards it; the host loads sections in
- * parallel.
+ * dependency — plus the cursor chains and served-id pools that
+ * walk the listings (see the pagination chapter above): per-route,
+ * LRU-capped, re-derived from page 1 by any fresh instance. One
+ * lock guards it all; the host loads sections in parallel.
  *
  * ## Dimensions
  *
@@ -128,7 +145,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "Zedge",
-            versionName = "1.1.0",
+            versionName = "1.2.0",
             author = "Cloudimage",
             description =
                 "Free HD phone wallpapers from zedge.net - the flat directory of single " +
@@ -164,8 +181,10 @@ class ZedgeWallpaperProvider : WallpaperProvider {
      * to the landing, the contract's documented behavior for values
      * a provider cannot express). Sorting values are ignored: the
      * landing IS the site's download-ranked popular order, and no
-     * other ranking is addressable. Single page — [ZedgeParser]'s
-     * documentation explains why `nextPage` never lies about more.
+     * other ranking is addressable. The feed walks the cursor chain:
+     * page 1 is the bare route, every deeper page rides the cursor the
+     * previous page handed over (see the class documentation for the
+     * guards that keep the walk honest).
      */
     override suspend fun popular(
         page: Int,
@@ -185,6 +204,9 @@ class ZedgeWallpaperProvider : WallpaperProvider {
      * audio-only answer parses to the honest zero. A blank query
      * (the contract's escape hatch) lands on the popular landing's
      * first page, the same default the blank popular feed shows.
+     * Single page, the honest answer: the sections of the captured
+     * grammar carry no continuation cursor anywhere, so a deeper
+     * search page is the honest empty without a request.
      */
     override suspend fun search(
         query: String,
@@ -297,19 +319,54 @@ class ZedgeWallpaperProvider : WallpaperProvider {
     // ------------------------------------------------------------ streams
 
     /**
-     * One listing page: fetch, parse the stream's tiles, the honest
-     * `nextPage = null` every time (the site's "Load more" cursor is
-     * a client XHR the URL cannot express — see the class
-     * documentation). A page past the first answers the honest empty,
-     * never a repeat of the first — and never a request either.
+     * One listing page of the cursor chain. Page 1 is the bare route:
+     * its response states the tiles AND the cursor that continues the
+     * grid. A deeper page asks the server for the cursor the previous
+     * page handed over, as search params on the same route — the
+     * continuation the site's own "Load more" rides, expressed in the
+     * one grammar a GET can address.
+     *
+     * Two guards keep the walk honest (the class documentation tells
+     * the full story): a server that ignores the cursor re-serves the
+     * identical listing — the same `next` marker comes back, the echo
+     * is detected, and the answer is the honest empty, never a repeat
+     * of the first page to fake depth; and a page whose items are all
+     * dups of what already served is the honest empty too, even when
+     * its cursor looks fresh. A cold page the chain cannot address (a
+     * chain lost with the instance, a page the site never offered) is
+     * the honest empty without a request.
      */
     private suspend fun listingPage(
         path: String,
         page: Int,
     ): Page {
-        if (page != 1) return Page(emptyList(), nextPage = null)
-        val html = fetchPage("$BASE_URL$path")
-        return Page(ZedgeParser.parseGrid(html).map(::gridWallpaper), nextPage = null)
+        if (page < 1) return Page(emptyList(), nextPage = null)
+
+        if (page == 1) {
+            val listing = ZedgeParser.parseListing(fetchPage("$BASE_URL$path"))
+            return synchronized(lock) {
+                val state = listingStateOf(path)
+                state.cursors.clear()
+                state.seen.clear()
+                listing.items.forEach { rememberSeen(state, it.id) }
+                advanceChain(state, page, listing.nextCursor)
+                Page(listing.items.map(::gridWallpaper), nextPageOf(page, listing.nextCursor))
+            }
+        }
+
+        val cursor =
+            synchronized(lock) { listingStateOf(path).cursors.getOrNull(page - 2) }
+                ?: return Page(emptyList(), nextPage = null)
+        val listing = ZedgeParser.parseListing(fetchPage(continuationUrl(path, cursor, page)))
+        if (listing.nextCursor == cursor) return Page(emptyList(), nextPage = null)
+        return synchronized(lock) {
+            val state = listingStateOf(path)
+            val fresh = listing.items.filter { it.id !in state.seen }
+            if (fresh.isEmpty()) return Page(emptyList(), nextPage = null)
+            fresh.forEach { rememberSeen(state, it.id) }
+            advanceChain(state, page, listing.nextCursor)
+            Page(fresh.map(::gridWallpaper), nextPageOf(page, listing.nextCursor))
+        }
     }
 
     // ------------------------------------------------------------- mapping
@@ -340,6 +397,74 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         }
     }
 
+    // -------------------------------------------------------- cursor chain
+
+    /**
+     * One listing's walk state: the cursor chain the site hands over
+     * page by page, and the pool of ids this instance already served
+     * for the route — the no-dup waterline both chain guards read.
+     */
+    private class ListingState {
+        /** cursors[page - 2] is the cursor that fetches `page` (index 0 serves page 2). */
+        val cursors = ArrayList<String>()
+
+        /** The ids already served for the route, capped, insertion-ordered. */
+        val seen = LinkedHashSet<String>()
+    }
+
+    /** The walk state of [path], LRU-evicted at the cap — [listingPage] tells the story. */
+    private fun listingStateOf(path: String): ListingState {
+        listings[path]?.let { return it }
+        if (listings.size >= LISTING_LIMIT) {
+            listings.remove(listings.keys.first())
+        }
+        return ListingState().also { listings[path] = it }
+    }
+
+    /**
+     * The continuation the site's own "Load more" rides, as the one
+     * grammar a GET can address: the cursor the previous page handed
+     * over on the same route, page-numbered alongside so a server
+     * that walks by numbered pages serves the same continuation too.
+     * Unknown params are ignored by the site's routes, never an error.
+     */
+    private fun continuationUrl(
+        path: String,
+        cursor: String,
+        page: Int,
+    ): String = "$BASE_URL$path?cursor=${encode(cursor)}&page=$page"
+
+    /** Records [id] in the route's served pool, capped. */
+    private fun rememberSeen(
+        state: ListingState,
+        id: String,
+    ) {
+        if (state.seen.size < SEEN_ID_LIMIT) state.seen.add(id)
+    }
+
+    /**
+     * Extends the chain by [nextCursor] when it continues the page
+     * just served — the recorded cursor is the one [listingPage] uses
+     * for the page after it, and the site hands a fresh marker per
+     * advancing page (the echo guard catches the exception).
+     */
+    private fun advanceChain(
+        state: ListingState,
+        page: Int,
+        nextCursor: String?,
+    ) {
+        val cursor = nextCursor ?: return
+        if (state.cursors.size == page - 1 && state.cursors.size < CURSOR_CHAIN_LIMIT) {
+            state.cursors.add(cursor)
+        }
+    }
+
+    /** The next page number when the site states a continuation, else none. */
+    private fun nextPageOf(
+        page: Int,
+        cursor: String?,
+    ): Int? = cursor?.let { page + 1 }
+
     // ------------------------------------------------------------ plumbing
 
     /** The wallpaper page of an id — the UUID route, encoded honestly. */
@@ -366,6 +491,9 @@ class ZedgeWallpaperProvider : WallpaperProvider {
 
     /** Tags read off fetched detail pages, feeding [suggestTags]. */
     private val tagPool = LinkedHashSet<String>()
+
+    /** Listing walk state per route — cursor chains and served-id pools, LRU-evicted. */
+    private val listings = LinkedHashMap<String, ListingState>(16, 0.75f, true)
 
     private companion object {
         const val ID = "cloudimage.zedge"
@@ -462,5 +590,10 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         /** Tag pool and suggestion caps. */
         const val TAG_POOL_LIMIT = 200
         const val TAG_SUGGESTION_LIMIT = 8
+
+        /** Walk-state caps: routes kept, cursors per route, ids per route. */
+        const val LISTING_LIMIT = 32
+        const val CURSOR_CHAIN_LIMIT = 64
+        const val SEEN_ID_LIMIT = 512
     }
 }
