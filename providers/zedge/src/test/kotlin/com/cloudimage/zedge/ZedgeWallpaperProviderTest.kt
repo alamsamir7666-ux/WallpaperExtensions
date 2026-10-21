@@ -70,7 +70,10 @@ class ZedgeWallpaperProviderTest {
     private val landingUrl = "https://www.zedge.net/wallpapers"
     private val animeUrl = "https://www.zedge.net/category/wallpapers/anime"
     private val peopleUrl = "https://www.zedge.net/category/wallpapers/people"
+    private val findWallpapersNatureUrl = "https://www.zedge.net/find/wallpapers/nature"
     private val findNatureUrl = "https://www.zedge.net/find/nature"
+    private val findWallpapersRingtonsUrl = "https://www.zedge.net/find/wallpapers/ringtons%20free"
+    private val findRingtonsUrl = "https://www.zedge.net/find/ringtons%20free"
 
     /** The cursor continuations the provider builds for the captured walks. */
     private val page2Url =
@@ -86,13 +89,22 @@ class ZedgeWallpaperProviderTest {
             "aGVkQXQ9MTc5MTY0NDQ2MjAwMHxpZD1mNzJjZDY5Ni1kNDg5LTQ3YTUtODVlMi03ZTM1NWI4YzU0MWR8" +
             "X3ByZWZlcmVuY2U9MWNlMGU0YjAtNGZkYi00OGY0LWFiYzUtZTgyZjZlZDJjMjRi&page=2"
 
+    /** The search route's own continuation, built from the synthesized fixture cursor. */
+    private val searchPage2Url =
+        "https://www.zedge.net/find/wallpapers/nature?cursor=X3Njb3JlPTkuNzV8Zmlyc3RQdWJsaXNoZWRBdD0xNzkyNTQ4" +
+            "MDAwMDAwfGlkPTNmMmE5YzFlLThiNGQtNGU2Zi05YTJiLTdjOGQ1ZTZmN2EwMXxfcHJlZmVyZW5jZT01MDAyNGFlMS1hYzczLTRlN2MtOGJm" +
+            "OC03MzQ3ODVhYjQ1ZWU%3D&page=2"
+
     /** The live site's routes wired to the real captures. */
     private fun liveRoutes(): Map<String, ProviderHttpResponse> =
         mapOf(
             landingUrl to ok(ZedgeTestPages.landing),
             animeUrl to ok(ZedgeTestPages.animeCategory),
             peopleUrl to ok(ZedgeTestPages.animeCategory),
+            findWallpapersNatureUrl to ok(ZedgeTestPages.searchWallpapers),
             findNatureUrl to ok(ZedgeTestPages.search),
+            findWallpapersRingtonsUrl to ok(ZedgeTestPages.searchAudioOnly),
+            findRingtonsUrl to ok(ZedgeTestPages.search),
             "https://www.zedge.net/wallpaper/d5ba41da-102a-4ebc-82a4-08571bb4a0c9" to ok(ZedgeTestPages.detail),
         )
 
@@ -251,15 +263,67 @@ class ZedgeWallpaperProviderTest {
         }
 
     @Test
-    fun searchWalksTheSitesOwnSearchScopedToWallpapers() =
+    fun searchWalksTheWallpapersOnlyRoute() =
         runTest {
             val client = configureWith(liveRoutes())
 
             val page = provider.search("nature", page = 1).getOrThrow()
 
-            assertEquals(listOf(findNatureUrl), client.requests)
+            assertEquals(listOf(findWallpapersNatureUrl), client.requests)
             assertEquals(3, page.wallpapers.size)
             assertEquals("Anime blue-lock", page.wallpapers.first().title)
+            assertEquals("the route states its own continuation", 2, page.nextPage)
+        }
+
+    @Test
+    fun searchRidesTheCursorChainLikeEveryListing() =
+        runTest {
+            val client =
+                configureWith(liveRoutes() + (searchPage2Url to ok(ZedgeTestPages.landingPage2)))
+
+            val first = provider.search("nature", page = 1).getOrThrow()
+            assertEquals(2, first.nextPage)
+
+            val second = provider.search("nature", page = 2).getOrThrow()
+
+            assertEquals(
+                listOf(findWallpapersNatureUrl, searchPage2Url),
+                client.requests,
+            )
+            assertEquals("Aurora Ridge", second.wallpapers.first().title)
+            assertEquals("an advancing search page states the next one", 3, second.nextPage)
+        }
+
+    @Test
+    fun aWallpapersRouteTheSiteAnswersEmptyFallsBackToTheMixedSearch() =
+        runTest {
+            val client = configureWith(liveRoutes())
+
+            val page = provider.search("ringtons free", page = 1).getOrThrow()
+
+            assertEquals(
+                "the empty grid is asked, then the mixed page once",
+                listOf(findWallpapersRingtonsUrl, findRingtonsUrl),
+                client.requests,
+            )
+            assertEquals(3, page.wallpapers.size)
+            assertEquals("the mixed fallback states no cursor anywhere", null, page.nextPage)
+        }
+
+    @Test
+    fun anAudioOnlyQueryParsesToTheHonestZeroBothWays() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        findWallpapersRingtonsUrl to ok(ZedgeTestPages.searchAudioOnly),
+                        findRingtonsUrl to ok(ZedgeTestPages.searchAudioOnly),
+                    ),
+                )
+
+            val page = provider.search("ringtons free", page = 1).getOrThrow()
+
+            assertTrue("audio never serves as wallpapers", page.wallpapers.isEmpty())
             assertNull(page.nextPage)
         }
 
@@ -275,7 +339,7 @@ class ZedgeWallpaperProviderTest {
         }
 
     @Test
-    fun searchPastTheFirstPageIsTheHonestEmpty() =
+    fun searchPastTheFirstPageIsTheHonestEmptyWhenTheChainIsCold() =
         runTest {
             val client = configureWith(liveRoutes())
 
@@ -402,7 +466,7 @@ class ZedgeWallpaperProviderTest {
     fun theMetaStatesTheFlatDoctrine() {
         assertEquals("cloudimage.zedge", provider.meta.id)
         assertEquals("Zedge", provider.meta.name)
-        assertEquals("1.2.0", provider.meta.versionName)
+        assertEquals("1.3.0", provider.meta.versionName)
         assertEquals(
             setOf(Capability.POPULAR, Capability.SEARCH, Capability.TAGS, Capability.FILTERS),
             provider.capabilities,
