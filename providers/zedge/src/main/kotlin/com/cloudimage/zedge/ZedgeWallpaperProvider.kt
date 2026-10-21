@@ -12,6 +12,10 @@ import com.cloudimage.provider.api.ProviderSettings
 import com.cloudimage.provider.api.Wallpaper
 import com.cloudimage.provider.api.WallpaperDetails
 import com.cloudimage.provider.api.WallpaperProvider
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.net.URLEncoder
 import kotlin.random.Random
 
@@ -65,31 +69,68 @@ import kotlin.random.Random
  * ladder delivered the document (the plain GET's raw HTML and the
  * WebView lane's rendered DOM both keep their script contents).
  *
- * ## Cursor-chain pagination (v1.2.0, search since v1.3.0)
+ * ## Cursor-chain pagination (v1.2.0, search since v1.3.0, the site's
+ * own Load-more lane since v1.4.0)
  *
  * The grids' "Load more" is a cursor walk: every listing response
  * states, in its own flight stream, the base64 keyset cursor that
  * continues it (`initialData.pages[].next` — the same marker the
  * site's own client-side walk rides, an Elasticsearch-style
- * `_score|firstPublishedAt|id|_preference` search-after key). The
- * provider walks that chain: page 1 is the bare route, and every
- * deeper page asks the server for the cursor the previous page
- * handed over, as search params on the same route — the one
- * grammar a GET can address, and both lanes of the host ladder
- * deliver it (the plain GET's raw HTML and the WebView lane's
- * rendered DOM keep their flight scripts either way). The search
- * route rides the very same chain: its page is a grid page, its
- * cursor is the same marker, and a route the site serves in the
- * section grammar instead (or with nothing at all) simply never
- * states a cursor and stays the honest single page.
+ * `_score|firstPublishedAt|id|_preference` search-after key). Page 1
+ * of every route is the bare GET — the site's server-rendered answer,
+ * whichever lane of the host ladder delivered it.
  *
- * Two guards keep the chain honest: a server that ignores the
- * cursor re-serves the identical listing — the same `next` marker
- * comes back, the echo is detected, and the answer is the honest
- * empty, never a repeat of the first page to fake depth; and a
- * page whose items are all dups of what already served is the
- * honest empty too, even when its cursor looks fresh. A fresh
- * instance (the host may pool or recreate plugins) re-derives the
+ * v1.4.0 adds the lane the site's own "Load more" button rides,
+ * captured from its browser and replayed live: a POST to
+ * `/api/graphql` (`browse_filteredList`) whose input carries the
+ * route's keyword terms and the cursor as `next`, answering the SAME
+ * item records and the SAME `next` marker the flight stream carries —
+ * the one true continuation lane for the search and category routes,
+ * whose SSR ignores every cursor parameter (verified live: the
+ * ignored `?cursor=` comes back echoed, while the POST advances and
+ * serves fresh tiles). The provider asks the POST lane first on every
+ * deeper page; a host whose facade predates the v1.3 POST method
+ * (the call fails as a `NoSuchMethodError` on the old interface), a
+ * refused POST, or an unparseable answer degrades to the GET
+ * continuation the chain always rode — the guarded pre-v1.4.0
+ * behavior, byte for byte.
+ *
+ * The keyword terms the POST input carries are the route's own: the
+ * search's query verbatim, the category page's slug capitalized the
+ * way the site's own category page sends it, and none at all for the
+ * landing — the shapes captured from the site's own requests for all
+ * three route families. The terms are load-bearing, not cosmetic:
+ * probe-verified live, a continuation POST with EMPTY keywords is
+ * answered with the popular feed instead of the search's — the
+ * keywords select the feed, the cursor only positions the walk inside
+ * it.
+ *
+ * THE CONTEXT BRIDGE (v1.4.0, probe-verified live): the POST scores
+ * its answers in its own ranking context, and a search route's SSR
+ * page-1 cursor can carry scores from a different one — the observed
+ * live case scored the search's top 24 at ~30.6 in SSR while the
+ * same items score ~15.3 under the POST's keywords query — and a
+ * cursor whose score towers over the POST context's own top is
+ * unusable there: the endpoint answers with the feed's own first
+ * page again, items all dups but a `next` marker that IS the page-1
+ * boundary in the POST's own context. The provider bridges exactly
+ * that: an all-dup POST answer carrying a fresh cursor is re-asked
+ * once with that cursor, and the follow-up serves the route's true
+ * next page — the walk a fresh cursor stalls, the walk a bridged one
+ * serves (probe logs: 120+ unique wallpapers for the probe query
+ * past the stall). The bridge never fabricates — the dup guard has
+ * the last word, so a bridged answer of recycled tiles ends the walk
+ * as honestly as before.
+ *
+ * The guard that keeps the chain honest: a page whose items are ALL
+ * dups of what already served is the honest empty, even when its
+ * cursor looks fresh — the guard that catches an ignoring server's
+ * echoed page AND tolerates the deep-answer exception where the
+ * cursor echoes its own input while the items stay fresh (the
+ * endpoint's deep pages rotate; fresh items serve and the echoed
+ * cursor simply re-asks the same window, dup-guarded against any
+ * repeat). A fresh instance (the host may pool or recreate plugins)
+ * re-derives the
  * chain from page 1 — the host's page walks are sequential by
  * design (`nextPage`-driven), so the chain is always warm before
  * it is read. A search route the site answers with nothing falls
@@ -156,7 +197,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "Zedge",
-            versionName = "1.3.0",
+            versionName = "1.4.0",
             author = "Cloudimage",
             description =
                 "Free HD phone wallpapers from zedge.net - the flat directory of single " +
@@ -204,7 +245,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         runCatching {
             val category = filters.valuesFor("category").firstNotNullOfOrNull(hostCategoryPath::get)
             val path = category ?: LANDING_PATH
-            listingPage(path, page)
+            listingPage(path, page, keywordsOf(path))
         }
 
     /**
@@ -229,9 +270,9 @@ class ZedgeWallpaperProvider : WallpaperProvider {
     ): Result<Page> =
         runCatching {
             if (query.isBlank()) {
-                return@runCatching listingPage(LANDING_PATH, 1)
+                return@runCatching listingPage(LANDING_PATH, 1, keywordsOf(LANDING_PATH))
             }
-            listingPage(searchPath(query), page, mixedFallback = query)
+            listingPage(searchPath(query), page, keywords = listOf(query), mixedFallback = query)
         }
 
     /**
@@ -335,30 +376,64 @@ class ZedgeWallpaperProvider : WallpaperProvider {
      * its response states the tiles AND the cursor that continues the
      * grid, whichever grammar it speaks — the listing grammar, or the
      * search sections when that is the page's answer (both parse to
-     * the same tiles-plus-cursor shape). A deeper page asks the server
-     * for the cursor the previous page handed over, as search params
-     * on the same route — the continuation the site's own "Load
-     * more" rides, expressed in the one grammar a GET can address.
+     * the same tiles-plus-cursor shape).
      *
-     * [mixedFallback] — search routes only — covers the page the grid
-     * serves nothing on: the mixed search page is asked once, and its
-     * own `WALLPAPER` section serves when it carries any. It states no
-     * cursor anywhere, so the fallback answer is single-page by
-     * construction, never a fake continuation.
+     * A deeper page rides the cursor the previous page handed over
+     * through the site's own Load-more lane FIRST: the POST to
+     * `/api/graphql` (`browse_filteredList`) whose `input.next` carries
+     * the cursor and whose `input.keywords` carry the route's terms —
+     * the request the site's own browser issues, captured and replayed
+     * live, and the only lane that advances the search and category
+     * routes (their SSR ignores every cursor parameter). The guard
+     * around the POST catches every way a host predating the v1.3 POST
+     * facade can fail — the `NoSuchMethodError` of a missing interface
+     * method included — and degrades to the GET continuation the chain
+     * always rode: the cursor as search params on the same route, the
+     * one grammar a GET can address, which both lanes of the host
+     * ladder deliver. A POST answer shaped as the listing's own honest
+     * end (no items, no cursor) serves as the answer directly — no GET
+     * fallback re-asks a page the endpoint just said is over.
      *
-     * Two guards keep the walk honest (the class documentation tells
-     * the full story): a server that ignores the cursor re-serves the
-     * identical listing — the same `next` marker comes back, the echo
-     * is detected, and the answer is the honest empty, never a repeat
-     * of the first page to fake depth; and a page whose items are all
-     * dups of what already served is the honest empty too, even when
-     * its cursor looks fresh. A cold page the chain cannot address (a
-     * chain lost with the instance, a page the site never offered) is
-     * the honest empty without a request.
+     * [keywords] are the route's own POST terms (see [keywordsOf]);
+     * [mixedFallback] — search routes only — covers the page-1 grid
+     * that serves nothing: the mixed search page is asked once, and
+     * its own `WALLPAPER` section serves when it carries any. It
+     * states no cursor anywhere, so the fallback answer is
+     * single-page by construction, never a fake continuation.
+     *
+     * THE CONTEXT BRIDGE (verified live, probe-branch logs): the POST
+     * scores its answers in its own ranking context, and a search
+     * route's SSR page-1 cursor can carry scores from a DIFFERENT
+     * context (the wallpapers-only search's SSR scores its top 24 at
+     * ~30.6 while the same items score ~15.3 under the POST's keywords
+     * query) — a cursor whose score towers over the POST context's
+     * own top is unusable there, and the endpoint answers with the
+     * feed's own first page again: items all dups, but a `next` marker
+     * that IS the page-1 boundary in the POST's own context. The
+     * bridge rides exactly that: an all-dup POST answer carrying a
+     * fresh cursor is re-asked ONCE with the fresh cursor — the
+     * follow-up serves the route's true next page (probe-verified:
+     * the bridged walk served fresh tiles page after page past the
+     * point the bare cursor stalled). The bridge never fabricates:
+     * the dup guard below still has the last word, so a bridged
+     * answer of recycled tiles ends the walk as honestly as before.
+     *
+     * The one guard that keeps the walk honest (the class documentation
+     * tells the full story): a page whose items are ALL dups of what
+     * already served is the honest empty, even when its cursor looks
+     * fresh — the guard that catches an ignoring server's echoed page
+     * (identical listing, identical `next` marker) AND tolerates the
+     * deep-answer exception where the cursor echoes its own input
+     * while the items stay fresh (the endpoint's deep pages rotate;
+     * fresh items serve and the echoed cursor simply re-asks the same
+     * window, dup-guarded against any repeat). A cold page the chain
+     * cannot address (a chain lost with the instance, a page the site
+     * never offered) is the honest empty without a request.
      */
     private suspend fun listingPage(
         path: String,
         page: Int,
+        keywords: List<String>,
         mixedFallback: String? = null,
     ): Page {
         if (page < 1) return Page(emptyList(), nextPage = null)
@@ -382,8 +457,30 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         val cursor =
             synchronized(lock) { listingStateOf(path).cursors.getOrNull(page - 2) }
                 ?: return Page(emptyList(), nextPage = null)
-        val listing = ZedgeParser.parseListingOrSearch(fetchPage(continuationUrl(path, cursor, page)))
-        if (listing.nextCursor == cursor) return Page(emptyList(), nextPage = null)
+        val posted =
+            runCatching {
+                ZedgeParser.parseGraphqlListing(postListing(keywords, cursor))
+            }.getOrNull()
+        var listing =
+            when {
+                posted != null && (posted.items.isNotEmpty() || posted.nextCursor == null) -> posted
+                else -> ZedgeParser.parseListingOrSearch(fetchPage(continuationUrl(path, cursor, page)))
+            }
+        // The context bridge: an all-dup POST answer with a fresh cursor
+        // re-served the route's top in the POST's own ranking context —
+        // its `next` is that context's true page-1 boundary, so riding it
+        // once serves the real next page. Asked outside the lock; the
+        // authoritative dup guard below still has the last word.
+        if (posted != null && listing.nextCursor != null && listing.nextCursor != cursor) {
+            val served = synchronized(lock) { listingStateOf(path).seen.toSet() }
+            if (listing.items.isNotEmpty() && listing.items.all { it.id in served }) {
+                val bridged =
+                    runCatching {
+                        ZedgeParser.parseGraphqlListing(postListing(keywords, listing.nextCursor!!))
+                    }.getOrNull()
+                if (bridged != null && bridged.items.isNotEmpty()) listing = bridged
+            }
+        }
         return synchronized(lock) {
             val state = listingStateOf(path)
             val fresh = listing.items.filter { it.id !in state.seen }
@@ -513,6 +610,71 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         return response.bodyText
     }
 
+    // --------------------------------------------------------- graphql lane
+
+    /**
+     * The site's own Load-more exchange, replayed byte-shaped the way its
+     * browser issues it: a POST to `/api/graphql` whose body carries the
+     * captured `browse_filteredList` document, the route's own
+     * [keywords], the wallpaper-only filter set (`itemType WALLPAPER`,
+     * `profileType ANY`, `sort RELEVANT`, `size` the site's own 24) and
+     * the cursor the previous page handed over as `input.next` — the
+     * exact request shape captured from the site's own browser and
+     * replayed live (HTTP 200, the same item records the SSR flight
+     * carries, a fresh `next` marker per advancing page). Non-2xx
+     * answers throw — the caller's guard degrades to the GET
+     * continuation, so a refused POST is never a page's dead end.
+     */
+    private suspend fun postListing(
+        keywords: List<String>,
+        cursor: String,
+    ): String {
+        val client = httpClient ?: error("provider used before configure()")
+        val body =
+            buildJsonObject {
+                put("operationName", "browse_filteredList")
+                put("query", GRAPHQL_QUERY)
+                put(
+                    "variables",
+                    buildJsonObject {
+                        put(
+                            "input",
+                            buildJsonObject {
+                                put("keywords", JsonArray(keywords.map(::JsonPrimitive)))
+                                put("itemType", WALLPAPER_TYPE)
+                                put("categories", JsonArray(emptyList()))
+                                put("colors", JsonArray(emptyList()))
+                                put("profileType", "ANY")
+                                put("sort", "RELEVANT")
+                                put("size", 24)
+                                put("next", cursor)
+                            },
+                        )
+                    },
+                )
+            }.toString()
+        val response = client.post("$BASE_URL/api/graphql", body)
+        if (!response.isSuccessful) {
+            throw httpError(response.statusCode)
+        }
+        return response.bodyText
+    }
+
+    /**
+     * The route's own POST terms — the shapes captured from the site's
+     * own browser for all three route families: the landing carries none
+     * (its ranked walk is cursor-addressed alone), and a category page
+     * carries its slug capitalized the way the site's own page sends it
+     * (`/category/wallpapers/wolf` POSTs `["Wolf"]`, captured verbatim).
+     */
+    private fun keywordsOf(path: String): List<String> =
+        when {
+            path == LANDING_PATH -> emptyList()
+            path.startsWith(CATEGORY_PREFIX) ->
+                listOf(path.removePrefix(CATEGORY_PREFIX).replaceFirstChar { it.uppercaseChar() })
+            else -> emptyList()
+        }
+
     /** URL-encoded for the site's paths — spaces as `%20`, the form its own routes speak. */
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
@@ -531,6 +693,39 @@ class ZedgeWallpaperProvider : WallpaperProvider {
     private companion object {
         const val ID = "cloudimage.zedge"
         const val BASE_URL = "https://www.zedge.net"
+
+        /** The site's one wallpaper item type — audio and live products never serve. */
+        private const val WALLPAPER_TYPE = "WALLPAPER"
+
+        /** The category route prefix — [keywordsOf] reads the slug after it. */
+        private const val CATEGORY_PREFIX = "/category/wallpapers/"
+
+        /**
+         * The GraphQL document the site's own Load-more POSTs, trimmed to
+         * the fields the parser reads (the full browser capture also asks
+         * for `origin`, `paymentMethod` and `profile` blocks this walk
+         * never serves) — accepted by the endpoint live (HTTP 200, the
+         * same item records and `next` marker the verbatim capture
+         * answers, replayed from a clean network and pinned by the probe
+         * logs in the repository's probe branch).
+         */
+        private const val GRAPHQL_QUERY =
+            "query browse_filteredList(\$input: BrowseFilteredListFilterInput) {" +
+                "browse_filteredList(input: \$input) {...browseFilteredListResource}}" +
+                "fragment browseFilteredListResource on BrowseContinuationItems {" +
+                "items {...browseListItemResource ... on BrowseProfileItem" +
+                "{...browseListProfileItemResource}} next}" +
+                "fragment browseListItemResource on BrowseItem {" +
+                "... on BrowseWallpaperItem {id licensed title type " +
+                "meta {previewUrl microThumb thumbUrl}}" +
+                "... on BrowseRingtoneItem {id title type meta {thumbUrl}}" +
+                "... on BrowseNotificationSoundItem {id title type meta {thumbUrl}}" +
+                "... on BrowseLiveWallpaperItem {id title type meta {previewUrl thumbUrl}}" +
+                "... on BrowseDynamic24HWallpaperItem {id title type meta {previewUrl thumbUrl}}" +
+                "... on BrowseBatteryLevelWallpaperItem {id title type meta {previewUrl thumbUrl}}" +
+                "... on BrowseChargeScreenItem {id title type meta {previewUrl thumbUrl}}}" +
+                "fragment browseListProfileItemResource on BrowseProfileItem {" +
+                "id type avatarUrl verified name shareUrl}"
 
         /** The popular landing — the site's download-ranked grid. */
         const val LANDING_PATH = "/wallpapers"

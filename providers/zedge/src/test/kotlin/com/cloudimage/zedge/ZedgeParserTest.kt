@@ -216,6 +216,77 @@ class ZedgeParserTest {
         assertNull(ZedgeParser.parseListingOrSearch(ZedgeTestPages.plainHtml).nextCursor)
     }
 
+    // ----------------------------------------------------------- graphql
+
+    @Test
+    fun theGraphqlAnswerReadsItsItemsAndContinuationCursor() {
+        val page = ZedgeParser.parseGraphqlListing(ZedgeTestPages.graphqlContinuation)
+
+        assertEquals(3, page.items.size)
+        assertEquals("a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", page.items[0].id)
+        assertEquals("Ashen Meadow", page.items[0].title)
+        assertEquals("Tidal Glass", page.items[2].title)
+        assertEquals(
+            "X3Njb3JlPTguMTI1fGZpcnN0UHVibGlzaGVkQXQ9MTc5MjU0NzAwMDAwMHxpZD1jM2Q0ZTVmNi1hN2I4" +
+                "LTRjOWQtMGUxZi0yYTNiNGM1ZDZlN2Z8X3ByZWZlcmVuY2U9NTAwMjRhZTEtYTdjMy00ZTdjLThi" +
+                "ZjgtNzM0Nzg1YWI0NWVl",
+            page.nextCursor,
+        )
+        assertTrue(page.items.all { it.thumbUrl.startsWith("https://is.zobj.net/image-server/v1/images?r=") })
+    }
+
+    @Test
+    fun theGraphqlAnswerScopesToTheWallpaperTypeAlone() {
+        // The fixture carries the site's real RINGTONE record shape — the
+        // type scoping must drop it from the continuation lane too.
+        val page = ZedgeParser.parseGraphqlListing(ZedgeTestPages.graphqlContinuation)
+
+        assertTrue("a ringtone never serves as a wallpaper", page.items.none { it.id == "d4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f8a" })
+        assertEquals(3, page.items.size)
+    }
+
+    @Test
+    fun theAllDupGraphqlAnswerCarriesTheContextsOwnCursor() {
+        // The context-mismatch answer: items byte-identical to the search
+        // route's own page-1 tiles, but a `next` marker from the POST's
+        // own ranking context — the marker the provider's bridge rides.
+        val page = ZedgeParser.parseGraphqlListing(ZedgeTestPages.graphqlAllDupWithContextCursor)
+        val ssr = ZedgeParser.parseListing(ZedgeTestPages.searchWallpapers)
+
+        assertEquals(ssr.items.map { it.id }, page.items.map { it.id })
+        org.junit.Assert.assertNotEquals(
+            "the mismatch answer's cursor is NOT the SSR page's marker",
+            ssr.nextCursor,
+            page.nextCursor,
+        )
+        assertEquals(
+            "X3Njb3JlPTUuNXxmaXJzdFB1Ymxpc2hlZEF0PTE3OTI1NDcwMDAwMDB8aWQ9ZTU2ZDZmNDgtNjVlMi00" +
+                "OTVlLWJjYjctYzk2MjM0NDZhN2FmfF9wcmVmZXJlbmNlPTUwMDI0YWUxLWE3YzMtNGU3Yy04YmY4" +
+                "LTczNDc4NWFiNDVlZQ==",
+            page.nextCursor,
+        )
+    }
+
+    @Test
+    fun theGraphqlLanesHonestEndStatesNoCursor() {
+        val page = ZedgeParser.parseGraphqlListing(ZedgeTestPages.graphqlLastPage)
+
+        assertEquals(2, page.items.size)
+        assertEquals("Amber Drift", page.items[0].title)
+        assertNull(page.nextCursor)
+    }
+
+    @Test
+    fun aGraphqlErrorAnswerParsesToTheHonestZero() {
+        val error = ZedgeParser.parseGraphqlListing(ZedgeTestPages.graphqlError)
+        assertTrue(error.items.isEmpty())
+        assertNull(error.nextCursor)
+
+        val unparseable = ZedgeParser.parseGraphqlListing("not json at all")
+        assertTrue(unparseable.items.isEmpty())
+        assertNull(unparseable.nextCursor)
+    }
+
     // -------------------------------------------------------------- detail
 
     @Test

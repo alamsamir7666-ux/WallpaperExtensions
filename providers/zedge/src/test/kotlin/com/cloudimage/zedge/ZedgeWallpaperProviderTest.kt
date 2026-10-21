@@ -20,16 +20,21 @@ import org.junit.Test
  * 2026-10-21): the landing and category listings with their
  * `initialData` item records, the mixed-content search with its typed
  * sections, and the detail page with its `shareUrl`-bearing record.
- * Because the zone challenges datacenter egress, the captures rode the
- * site's own responses through a translator proxy — the streams are
- * zedge's, not the proxy's; the ZEDGE_LIVE=1 live checks pin them
- * against the live site from clean networks.
+ * The graphql fixtures are the site's own Load-more answers,
+ * synthesized from the request its browser issues (probe-branch
+ * logs). Because the zone challenges datacenter egress, the captures
+ * rode the site's own responses through a translator proxy — the
+ * streams are zedge's, not the proxy's; the ZEDGE_LIVE=1 live checks
+ * pin them against the live site from clean networks.
  *
  * The flat doctrine stays covered without a network: the landing, the
  * two native category routes, the search scoping that never leaks
  * ringtones into wallpapers, the honest empties (audio-only answers,
- * past-the-first pages, unrecognized detail screens), and the
- * challenge's 403 propagating untouched for the host ladder to own.
+ * past-the-first pages, unrecognized detail screens), the challenge's
+ * 403 propagating untouched for the host ladder to own — and the
+ * POST continuation lane: the site's own Load-more exchange first, the
+ * context bridge past the all-dup mismatch answer, and the GET
+ * degradation for a host that predates the POST facade.
  */
 class ZedgeWallpaperProviderTest {
     private val provider = ZedgeWallpaperProvider()
@@ -38,10 +43,20 @@ class ZedgeWallpaperProviderTest {
      * URL-routed responses: an exact match wins, then the first
      * prefix match in insertion order; unmatched URLs answer 500 to
      * fail loudly.
+     *
+     * POSTs pop [postAnswers] in order — the scripted Load-more
+     * answers — and an empty queue refuses with 500, exactly the way a
+     * host whose facade predates the v1.3 POST method fails the lane
+     * (the default-throwing interface method, or the 500s of a refused
+     * exchange), so the GET degradation stays covered by the same
+     * fake. POST bodies record separately from GET requests: the
+     * existing GET-lane assertions read [requests] untouched.
      */
     private class FakeClient : ProviderHttpClient {
         val requests = mutableListOf<String>()
+        val postBodies = mutableListOf<String>()
         var routes: Map<String, ProviderHttpResponse> = emptyMap()
+        val postAnswers = ArrayDeque<ProviderHttpResponse>()
 
         override suspend fun get(
             url: String,
@@ -55,15 +70,50 @@ class ZedgeWallpaperProviderTest {
                     ?.value
                 ?: ProviderHttpResponse(500, emptyMap(), ByteArray(0))
         }
+
+        override suspend fun post(
+            url: String,
+            body: String,
+            contentType: String,
+            headers: Map<String, String>,
+        ): ProviderHttpResponse {
+            postBodies += body
+            return postAnswers.removeFirstOrNull()
+                ?: ProviderHttpResponse(500, emptyMap(), ByteArray(0))
+        }
     }
+
+    private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+    /** The `variables.input` object of a recorded POST body — the Load-more request's input. */
+    private fun postInputOf(body: String): kotlinx.serialization.json.JsonObject {
+        val root = json.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
+        val variables = root["variables"] as kotlinx.serialization.json.JsonObject
+        return variables["input"] as kotlinx.serialization.json.JsonObject
+    }
+
+    /** The string value of one input field of a recorded POST body. */
+    private fun postInputStringOf(
+        body: String,
+        field: String,
+    ): String = (postInputOf(body)[field] as kotlinx.serialization.json.JsonPrimitive).content
+
+    /** The keywords of a recorded POST body, in order. */
+    private fun postKeywordsOf(body: String): List<String> =
+        (postInputOf(body)["keywords"] as kotlinx.serialization.json.JsonArray)
+            .map { (it as kotlinx.serialization.json.JsonPrimitive).content }
 
     private fun ok(body: String): ProviderHttpResponse = ProviderHttpResponse(200, emptyMap(), body.toByteArray())
 
     private fun status(code: Int): ProviderHttpResponse = ProviderHttpResponse(code, emptyMap(), ByteArray(0))
 
-    private fun configureWith(routes: Map<String, ProviderHttpResponse>): FakeClient =
+    private fun configureWith(
+        routes: Map<String, ProviderHttpResponse>,
+        postAnswers: List<ProviderHttpResponse> = emptyList(),
+    ): FakeClient =
         FakeClient().apply {
             this.routes = routes
+            this.postAnswers.addAll(postAnswers)
             provider.configure(this, ProviderSettings { null })
         }
 
@@ -294,6 +344,188 @@ class ZedgeWallpaperProviderTest {
             assertEquals("an advancing search page states the next one", 3, second.nextPage)
         }
 
+    // --------------------------------------------------------- graphql lane
+
+    @Test
+    fun deeperPagesRideTheSitesOwnLoadMoreLaneFirst() =
+        runTest {
+            val client =
+                configureWith(
+                    liveRoutes(),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlContinuation)),
+                )
+
+            provider.search("nature", page = 1).getOrThrow()
+            val second = provider.search("nature", page = 2).getOrThrow()
+
+            assertEquals(3, second.wallpapers.size)
+            assertEquals("Ashen Meadow", second.wallpapers.first().title)
+            assertEquals("an advancing POST answer states the next page", 3, second.nextPage)
+            assertEquals(
+                "no GET continuation re-asks what the POST answered",
+                listOf(findWallpapersNatureUrl),
+                client.requests,
+            )
+            assertEquals(1, client.postBodies.size)
+        }
+
+    @Test
+    fun thePostBodyIsTheSitesOwnLoadMoreRequest() =
+        runTest {
+            val client =
+                configureWith(
+                    liveRoutes(),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlContinuation)),
+                )
+
+            provider.search("nature", page = 1).getOrThrow()
+            provider.search("nature", page = 2).getOrThrow()
+
+            val body = client.postBodies.single()
+            val root = json.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
+            assertEquals(
+                "browse_filteredList",
+                (root["operationName"] as kotlinx.serialization.json.JsonPrimitive).content,
+            )
+            assertTrue(
+                (root["query"] as kotlinx.serialization.json.JsonPrimitive).content.contains("browse_filteredList"),
+            )
+            assertEquals(listOf("nature"), postKeywordsOf(body))
+            assertEquals("WALLPAPER", postInputStringOf(body, "itemType"))
+            assertEquals(24, postInputStringOf(body, "size").toInt())
+            assertEquals(
+                "the cursor page 1 handed over rides input.next",
+                ZedgeParser.parseListing(ZedgeTestPages.searchWallpapers).nextCursor,
+                postInputStringOf(body, "next"),
+            )
+        }
+
+    @Test
+    fun theCategoryLaneCarriesTheSitesOwnCapitalizedSlug() =
+        runTest {
+            val client =
+                configureWith(
+                    liveRoutes(),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlContinuation)),
+                )
+
+            provider.popular(page = 1, filters = Filters.of("category" to "anime")).getOrThrow()
+            provider.popular(page = 2, filters = Filters.of("category" to "anime")).getOrThrow()
+
+            assertEquals(
+                "the category POST carries the slug capitalized the site's own page sends",
+                listOf("Anime"),
+                postKeywordsOf(client.postBodies.single()),
+            )
+        }
+
+    @Test
+    fun theLandingLaneCarriesNoKeywords() =
+        runTest {
+            val client =
+                configureWith(
+                    liveRoutes(),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlContinuation)),
+                )
+
+            provider.popular(page = 1).getOrThrow()
+            provider.popular(page = 2).getOrThrow()
+
+            assertEquals(0, postKeywordsOf(client.postBodies.single()).size)
+        }
+
+    @Test
+    fun theContextBridgeRidesTheAllDupAnswerToTheTrueNextPage() =
+        runTest {
+            val client =
+                configureWith(
+                    liveRoutes(),
+                    postAnswers =
+                        listOf(
+                            ok(ZedgeTestPages.graphqlAllDupWithContextCursor),
+                            ok(ZedgeTestPages.graphqlContinuation),
+                        ),
+                )
+
+            provider.search("nature", page = 1).getOrThrow()
+            val second = provider.search("nature", page = 2).getOrThrow()
+
+            assertEquals(
+                "two POSTs: the mismatch answer, then the bridged page",
+                2,
+                client.postBodies.size,
+            )
+            assertEquals(
+                "the bridge serves the true next page's tiles",
+                "Ashen Meadow",
+                second.wallpapers.first().title,
+            )
+            assertEquals(3, second.nextPage)
+
+            assertEquals(
+                "the bridged POST rides the mismatch answer's own context cursor",
+                ZedgeParser.parseGraphqlListing(ZedgeTestPages.graphqlAllDupWithContextCursor).nextCursor,
+                postInputStringOf(client.postBodies[1], "next"),
+            )
+        }
+
+    @Test
+    fun aRefusedPostDegradesToTheGetContinuation() =
+        runTest {
+            // postAnswers stays empty — the fake refuses every POST with
+            // 500, the way a pre-v1.3 host (or a refused exchange) does.
+            val client =
+                configureWith(liveRoutes() + (searchPage2Url to ok(ZedgeTestPages.landingPage2)))
+
+            provider.search("nature", page = 1).getOrThrow()
+            val second = provider.search("nature", page = 2).getOrThrow()
+
+            assertEquals(
+                "the POST was attempted, then the GET continuation answered",
+                listOf(findWallpapersNatureUrl, searchPage2Url),
+                client.requests,
+            )
+            assertEquals("Aurora Ridge", second.wallpapers.first().title)
+        }
+
+    @Test
+    fun theGraphqlLanesHonestEndServesDirectly() =
+        runTest {
+            val client =
+                configureWith(
+                    liveRoutes(),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlLastPage)),
+                )
+
+            provider.search("nature", page = 1).getOrThrow()
+            val second = provider.search("nature", page = 2).getOrThrow()
+
+            assertEquals(2, second.wallpapers.size)
+            assertNull("no cursor, no next page", second.nextPage)
+            assertEquals(
+                "no GET re-ask of a page the endpoint said is over",
+                listOf(findWallpapersNatureUrl),
+                client.requests,
+            )
+        }
+
+    @Test
+    fun aGraphqlErrorAnswerIsTheHonestEmptyWithoutAGetReAsk() =
+        runTest {
+            val client =
+                configureWith(
+                    liveRoutes(),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlError)),
+                )
+
+            provider.search("nature", page = 1).getOrThrow()
+            val second = provider.search("nature", page = 2).getOrThrow()
+
+            assertTrue(second.wallpapers.isEmpty())
+            assertNull(second.nextPage)
+            assertEquals(listOf(findWallpapersNatureUrl), client.requests)
+        }
+
     @Test
     fun aWallpapersRouteTheSiteAnswersEmptyFallsBackToTheMixedSearch() =
         runTest {
@@ -466,7 +698,7 @@ class ZedgeWallpaperProviderTest {
     fun theMetaStatesTheFlatDoctrine() {
         assertEquals("cloudimage.zedge", provider.meta.id)
         assertEquals("Zedge", provider.meta.name)
-        assertEquals("1.3.0", provider.meta.versionName)
+        assertEquals("1.4.0", provider.meta.versionName)
         assertEquals(
             setOf(Capability.POPULAR, Capability.SEARCH, Capability.TAGS, Capability.FILTERS),
             provider.capabilities,

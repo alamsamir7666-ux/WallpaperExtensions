@@ -246,6 +246,36 @@ internal object ZedgeParser {
     }
 
     /**
+     * One GraphQL continuation answer read as a listing page — the
+     * grammar the site's own "Load more" speaks (verified live, request
+     * captured from the site's browser and replayed): a POST to
+     * `/api/graphql` answering `data.browse_filteredList` with the SAME
+     * item records the SSR flight carries — `id`, `title`, `type`, the
+     * `meta` renditions (`thumbUrl` the grid crop, `previewUrl` the
+     * bigger display) — and the same base64 keyset cursor under `next`.
+     *
+     * The cursor the previous page handed over rides the request as
+     * `input.next`; the answer's own `next` continues the chain exactly
+     * like the flight stream's `pages[].next` does, so the provider's
+     * one guarded walk serves both lanes. An answer the endpoint shapes
+     * as an error (`errors`, a null `data`, an unparseable body) parses
+     * to the honest zero with no cursor — never a fabricated page.
+     */
+    fun parseGraphqlListing(text: String): ListingPage {
+        val root =
+            runCatching { json.parseToJsonElement(text) as? JsonObject }
+                .getOrNull() ?: return ListingPage(emptyList(), null)
+        val data = root["data"] as? JsonObject ?: return ListingPage(emptyList(), null)
+        val listing = data["browse_filteredList"] as? JsonObject ?: return ListingPage(emptyList(), null)
+        val items =
+            (listing["items"] as? JsonArray)
+                ?.mapNotNull { item -> itemOf(item) }
+                ?.distinctBy { it.id }
+                ?: emptyList()
+        return ListingPage(items, listing.stringOf("next"))
+    }
+
+    /**
      * The wallpaper items of a search page, scoped to the site's own
      * `WALLPAPER` section: the mixed-content `searchInitialData` array
      * also carries dynamic wallpapers, ringtones, notification sounds
