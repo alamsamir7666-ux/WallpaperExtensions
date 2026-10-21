@@ -9,104 +9,170 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: Capture the load-more GraphQL input of all three route families
+      - name: End-to-end POST continuation chain for the user's exact query
         run: |
           set +e
-          sudo npm install -g puppeteer-core --silent 2>&1 | tail -1
-          cat > /tmp/capture.js <<'JS'
-          const puppeteer = require('puppeteer-core');
-          const fs = require('fs');
-          const sleep = ms => new Promise(r => setTimeout(r, ms));
-          (async () => {
-            const browser = await puppeteer.launch({
-              executablePath: '/usr/bin/google-chrome',
-              headless: 'new',
-              args: ['--no-sandbox', '--disable-dev-shm-usage', '--window-size=1280,2400'],
-            });
-            const targets = [
-              'https://www.zedge.net/find/wallpapers/wolf',
-              'https://www.zedge.net/wallpapers',
-              'https://www.zedge.net/category/wallpapers/wolf',
-            ];
-            const all = [];
-            for (const target of targets) {
-              const page = await browser.newPage();
-              await page.setViewport({width: 1280, height: 2400});
-              const posts = [];
-              page.on('request', r => {
-                if (r.url().includes('/api/graphql') && r.postData() && r.postData().includes('browse_filteredList')) {
-                  posts.push(r.postData());
-                }
-              });
-              console.log('GOTO', target);
-              try { await page.goto(target, {waitUntil: 'networkidle2', timeout: 90000}); }
-              catch (e) { console.log('goto err', e.message); }
-              await sleep(5000);
-              for (let i = 0; i < 8; i++) { await page.evaluate(() => window.scrollBy(0, 1500)); await sleep(600); }
-              const btn = await page.evaluateHandle(() => {
-                const all = [...document.querySelectorAll('button, a, [role="button"], span, div')];
-                return all.find(e => /load more/i.test((e.textContent || '') + (e.getAttribute && e.getAttribute('aria-label') || '')));
-              });
-              const el = btn && btn.asElement();
-              console.log('LOADMORE:', el ? (await el.evaluate(n => (n.textContent || '').trim().slice(0, 40) + '|' + n.tagName)) : 'NOT FOUND');
-              if (el) {
-                try { await el.scrollIntoView(); } catch (e) {}
-                await sleep(800);
-                try { await el.click(); console.log('CLICKED'); } catch (e) { console.log('click err', e.message); }
-                await sleep(9000);
-              }
-              console.log('CAPTURED POSTS for ' + target + ': ' + posts.length);
-              all.push({target, posts});
-              await page.close();
-            }
-            fs.writeFileSync('/tmp/all_inputs.json', JSON.stringify(all, null, 1));
-            for (const a of all) {
-              console.log('=== ' + a.target + ' ===');
-              a.posts.forEach((p, i) => {
-                try {
-                  const j = JSON.parse(p);
-                  const inp = (j.variables || {}).input || {};
-                  console.log('POST[' + i + '] input=' + JSON.stringify({k: inp.keywords, c: inp.categories, it: inp.itemType, pt: inp.profileType, s: inp.sort, sz: inp.size, hasNext: !!inp.next}));
-                } catch (e) { console.log('POST[' + i + '] unparseable'); }
-              });
-            }
-            await browser.close();
-          })().catch(e => { console.error('FATAL', e); process.exit(1); });
-          JS
-          NODE_PATH=$(npm root -g) node /tmp/capture.js 2>&1 | head -50
-      - name: Bare POST replay from curl (does the POST need cookies at all?)
-        run: |
-          set +e
-          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          cat > /tmp/replay.py <<'PY'
-          import json, urllib.request
+          cat > /tmp/chain.py <<'PY'
+          import json, re, sys, urllib.request
           UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-          allc = json.load(open('/tmp/all_inputs.json'))
-          # find the find-route post with a cursor
-          qdoc, inp = None, None
-          for a in allc:
-              if 'find' in a['target']:
-                  for p in a['posts']:
-                      try:
-                          j = json.loads(p)
-                          if (j.get('variables') or {}).get('input', {}).get('next'):
-                              qdoc, inp = j['query'], j['variables']['input']
-                      except Exception: pass
-          if not qdoc:
-              print("no captured find post with cursor"); raise SystemExit
-          body = json.dumps({'query': qdoc, 'variables': {'input': inp}}).encode()
-          req = urllib.request.Request('https://www.zedge.net/api/graphql', data=body, method='POST',
-              headers={'User-Agent': UA, 'Content-Type': 'application/json', 'Accept': '*/*'})
-          try:
+          BASE = "https://www.zedge.net"
+
+          QUERY_DOC = r"""
+              query browse_filteredList($input: BrowseFilteredListFilterInput) {
+                browse_filteredList(input: $input) {
+                  ...browseFilteredListResource
+                }
+              }
+
+            fragment browseFilteredListResource on BrowseContinuationItems {
+              items {
+                ...browseListItemResource
+
+                ... on BrowseProfileItem {
+                  ...browseListProfileItemResource
+                }
+              }
+              next
+            }
+
+            fragment browseListItemResource on BrowseItem {
+              ... on BrowseWallpaperItem {
+                id
+                licensed
+                title
+                type
+                meta {
+                  previewUrl
+                  microThumb
+                  thumbUrl
+                }
+              }
+
+              ... on BrowseRingtoneItem {
+                id
+                title
+                type
+                meta { thumbUrl }
+              }
+
+              ... on BrowseNotificationSoundItem {
+                id
+                title
+                type
+                meta { thumbUrl }
+              }
+
+              ... on BrowseLiveWallpaperItem {
+                id
+                title
+                type
+                meta { previewUrl thumbUrl }
+              }
+
+              ... on BrowseDynamic24HWallpaperItem {
+                id
+                title
+                type
+                meta { previewUrl thumbUrl }
+              }
+
+              ... on BrowseBatteryLevelWallpaperItem {
+                id
+                title
+                type
+                meta { previewUrl thumbUrl }
+              }
+
+              ... on BrowseChargeScreenItem {
+                id
+                title
+                type
+                meta { previewUrl thumbUrl }
+              }
+            }
+
+            fragment browseListProfileItemResource on BrowseProfileItem {
+              id
+              type
+              avatarUrl
+              verified
+              name
+              shareUrl
+            }
+            """
+
+          def http_get(url):
+              req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
               with urllib.request.urlopen(req, timeout=60) as r:
-                  rb = json.loads(r.read().decode())
-                  items = rb['data']['browse_filteredList']['items']
-                  print("bare POST replay (no cookies): http=%s items=%d next=%s" % (r.status, len(items), (rb['data']['browse_filteredList'].get('next') or '')[:50]))
-                  print("first item keys:", sorted(items[0].keys()))
-                  print("meta keys:", sorted((items[0].get('meta') or {}).keys()))
-          except urllib.error.HTTPError as e:
-              print("bare POST replay: http=%s body[:300]=%s" % (e.code, e.read().decode('utf-8','replace')[:300]))
-          except Exception as e:
-              print("bare POST replay: ERR", e)
+                  return r.status, r.read().decode("utf-8", "replace")
+
+          def graphql_post(cursor, keywords):
+              inp = {"keywords": keywords, "itemType": "WALLPAPER", "categories": [],
+                     "colors": [], "profileType": "ANY", "sort": "RELEVANT", "size": 24,
+                     "next": cursor}
+              body = json.dumps({"query": QUERY_DOC, "variables": {"input": inp},
+                                 "operationName": "browse_filteredList"}).encode()
+              req = urllib.request.Request(BASE + "/api/graphql", data=body, method="POST",
+                  headers={"User-Agent": UA, "Content-Type": "application/json", "Accept": "*/*"})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return r.status, json.loads(r.read().decode())
+
+          def flight_stream(html):
+              out = []
+              for m in re.finditer(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)', html, re.S):
+                  try:
+                      out.append(json.loads('"' + m.group(1) + '"'))
+                  except Exception:
+                      pass
+              return "".join(out)
+
+          query = "neha sharma"
+          path = "/find/wallpapers/" + urllib.request.quote(query)
+          print("[1] GET", path)
+          status, html = http_get(BASE + path)
+          print("    http", status, "bytes", len(html))
+          flight = flight_stream(html)
+          ids1 = set(re.findall(r'"id":"([0-9a-f-]{36})"', flight))
+          cursors = re.findall(r'"next":"([^"]+)"', flight)
+          cursor1 = cursors[-1] if cursors else None
+          print("    page-1 wallpaper ids:", len(ids1), "| cursor:", (cursor1 or "")[:44])
+          if not cursor1:
+              print("FAIL: no continuation cursor on page 1"); sys.exit(1)
+
+          seen = set(ids1)
+          cursor = cursor1
+          total = len(ids1)
+          for page in (2, 3, 4):
+              kw = [query.title()]
+              print(f"[{page}] POST keywords={kw} next={cursor[:40]}...")
+              status, payload = graphql_post(cursor, kw)
+              listing = (payload.get("data") or {}).get("browse_filteredList") or {}
+              items = listing.get("items") or []
+              fresh = [it for it in items if it.get("type") == "WALLPAPER"
+                       and it.get("id") and it["id"] not in seen]
+              fresh_ids = [it["id"] for it in fresh]
+              seen.update(fresh_ids)
+              cursor = listing.get("next")
+              total += len(fresh)
+              print(f"    http {status} items {len(items)} fresh {len(fresh)} | next: {(cursor or 'NONE')[:44]}")
+              if not fresh:
+                  print("FAIL: no fresh items at page", page); sys.exit(1)
+              if not cursor:
+                  print("    (chain ended honestly)"); break
+
+          print()
+          print("[case] lowercase keywords check (neha sharma vs Neha Sharma)")
+          status, p1 = graphql_post(cursor1, ["neha sharma"])
+          l1 = (p1.get("data") or {}).get("browse_filteredList") or {}
+          print("    lowercase -> http", status, "items", len(l1.get("items") or []))
+          status, p2 = graphql_post(cursor1, ["Neha Sharma"])
+          l2 = (p2.get("data") or {}).get("browse_filteredList") or {}
+          print("    titlecase -> http", status, "items", len(l2.get("items") or []))
+          ids_a = {i.get("id") for i in (l1.get("items") or [])}
+          ids_b = {i.get("id") for i in (l2.get("items") or [])}
+          print("    same result set:", ids_a == ids_b and len(ids_a) > 0)
+
+          print()
+          print(f"PASS: {total} unique wallpapers for '{query}' across the chain")
           PY
-          python3 /tmp/replay.py 2>&1 | head -20
+          python3 /tmp/chain.py 2>&1 | head -40
