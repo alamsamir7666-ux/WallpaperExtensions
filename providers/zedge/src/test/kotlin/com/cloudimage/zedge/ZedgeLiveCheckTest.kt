@@ -6,7 +6,6 @@ import com.cloudimage.provider.api.ProviderHttpResponse
 import com.cloudimage.provider.api.ProviderSettings
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -141,7 +140,7 @@ class ZedgeLiveCheckTest {
         }
 
     @Test
-    fun searchStillAnswersWallpapersOnly() =
+    fun searchStillAnswersTheWallpapersOnlyGrid() =
         runTest {
             assumeTrue(live())
             configureLive()
@@ -149,9 +148,29 @@ class ZedgeLiveCheckTest {
             val hit = provider.search("wolf", page = 1).getOrThrow()
 
             assertTrue("search hit empty", hit.wallpapers.isNotEmpty())
-            assertNull(hit.nextPage)
+            assertTrue(
+                "the wallpapers-only route serves a full grid: ${hit.wallpapers.size}",
+                hit.wallpapers.size >= 12,
+            )
             hit.wallpapers.forEach { wallpaper ->
                 assertTrue("search served a non-wallpaper shape: ${wallpaper.thumbUrl}", wallpaper.thumbUrl.startsWith(renditionHost))
+            }
+
+            // THE search grammar probe — the same walk the landing rides:
+            // a deeper page either advances with fresh tiles or ends
+            // honestly, and NEVER repeats a tile already served.
+            if (hit.nextPage != null) {
+                val second = provider.search("wolf", page = 2).getOrThrow()
+                if (second.wallpapers.isNotEmpty()) {
+                    val firstIds = hit.wallpapers.map { it.id }.toSet()
+                    second.wallpapers.forEach { wallpaper ->
+                        assertTrue("search page 2 repeated a tile: ${wallpaper.id}", wallpaper.id !in firstIds)
+                    }
+                }
+                assertTrue(
+                    "the search walk must advance or end honestly — never dangle",
+                    second.nextPage == null || second.wallpapers.isNotEmpty(),
+                )
             }
         }
 

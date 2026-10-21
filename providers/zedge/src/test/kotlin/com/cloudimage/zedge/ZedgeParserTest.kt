@@ -168,6 +168,54 @@ class ZedgeParserTest {
         assertEquals(0, ZedgeParser.parseSearch(ZedgeTestPages.searchAudioOnly).size)
     }
 
+    @Test
+    fun theCapturedMixedSectionsStateNoContinuationCursor() {
+        val page = ZedgeParser.parseSearchPage(ZedgeTestPages.search)
+
+        assertEquals(3, page.items.size)
+        assertNull("the captured sections carry no `next` marker anywhere", page.nextCursor)
+    }
+
+    @Test
+    fun aSectionGrammarThatStatesItsOwnCursorHandsItOver() {
+        val page = ZedgeParser.parseSearchPage(ZedgeTestPages.searchWallpaperSections)
+
+        assertEquals(3, page.items.size)
+        assertEquals(
+            "X3Njb3JlPTcuNXxmaXJzdFB1Ymxpc2hlZEF0PTE3OTIzNzUyMDAwMDB8aWQ9NWQ2ZTdmOGEtOWIwYy00ZDFlLThmMmEtM2I0YzVkNmU3ZjhhfF9wcmVmZXJlbmNlPTUwMDI0YWUxLWFjNzMtNGU3Yy04YmY4LTczNDc4NWFiNDVlZQ==",
+            page.nextCursor,
+        )
+    }
+
+    @Test
+    fun theWallpapersOnlyRouteSpeaksTheListingGrammarWithItsCursor() {
+        val page = ZedgeParser.parseListingOrSearch(ZedgeTestPages.searchWallpapers)
+
+        assertEquals(3, page.items.size)
+        assertEquals("Anime blue-lock", page.items[0].title)
+        assertEquals(
+            "X3Njb3JlPTkuNzV8Zmlyc3RQdWJsaXNoZWRBdD0xNzkyNTQ4MDAwMDAwfGlkPTNmMmE5YzFlLThiNGQtNGU2Zi05YTJiLTdjOGQ1ZTZmN2EwMXxfcHJlZmVyZW5jZT01MDAyNGFlMS1hYzczLTRlN2MtOGJmOC03MzQ3ODVhYjQ1ZWU=",
+            page.nextCursor,
+        )
+    }
+
+    @Test
+    fun theDualGrammarReadPrefersTheListingAndFallsBackToTheSections() {
+        // A grid page reads as the grid it is — the very listing parseListing serves.
+        assertEquals(
+            ZedgeParser.parseListing(ZedgeTestPages.landing),
+            ZedgeParser.parseListingOrSearch(ZedgeTestPages.landing),
+        )
+        // A sections page reads its WALLPAPER items the same way parseSearch does.
+        assertEquals(
+            ZedgeParser.parseSearch(ZedgeTestPages.search),
+            ZedgeParser.parseListingOrSearch(ZedgeTestPages.search).items,
+        )
+        // A page with no grammar at all is the honest zero with no cursor.
+        assertTrue(ZedgeParser.parseListingOrSearch(ZedgeTestPages.plainHtml).items.isEmpty())
+        assertNull(ZedgeParser.parseListingOrSearch(ZedgeTestPages.plainHtml).nextCursor)
+    }
+
     // -------------------------------------------------------------- detail
 
     @Test

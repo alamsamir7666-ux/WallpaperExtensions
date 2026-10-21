@@ -38,11 +38,16 @@ import kotlin.random.Random
  *   each a grid of single wallpapers. The host vocabulary's `anime`
  *   and `people` ride them natively; the rest of the directory serves
  *   the home shelves below through the site's own search.
- * - **Search** (`/find/{query}`) — the site's own mixed-content
- *   search, scoped to its `WALLPAPER` section so ringtones,
- *   notification sounds, live wallpapers and artist profiles never
- *   leak in. A query the site answers with audio only parses to the
- *   honest zero, the same honest-empty rule every flat source follows.
+ * - **Search** (`/find/wallpapers/{query}`) — the site's own
+ *   wallpapers-only results page, the one its "Wallpapers · View all"
+ *   link opens: a full grid of the query's wallpapers (24 tiles to
+ *   the mixed page's handful, verified live) in the same listing
+ *   grammar as the landing, ridden through the same cursor chain. A
+ *   route the site answers with the section grammar serves its
+ *   `WALLPAPER` sections; a route the site answers with nothing falls
+ *   back to the mixed search page once, so ringtones, notification
+ *   sounds, live wallpapers and artist profiles never leak in and an
+ *   audio-only answer parses to the honest zero either way.
  * - **Wallpaper pages** (`/wallpaper/{uuid}`) — the detail route the
  *   site's own sitemap system publishes by the thousand; the UUID is
  *   the wallpaper's stable id. The page's flight record discloses the
@@ -60,7 +65,7 @@ import kotlin.random.Random
  * ladder delivered the document (the plain GET's raw HTML and the
  * WebView lane's rendered DOM both keep their script contents).
  *
- * ## Cursor-chain pagination (v1.2.0)
+ * ## Cursor-chain pagination (v1.2.0, search since v1.3.0)
  *
  * The grids' "Load more" is a cursor walk: every listing response
  * states, in its own flight stream, the base64 keyset cursor that
@@ -72,7 +77,11 @@ import kotlin.random.Random
  * handed over, as search params on the same route — the one
  * grammar a GET can address, and both lanes of the host ladder
  * deliver it (the plain GET's raw HTML and the WebView lane's
- * rendered DOM keep their flight scripts either way).
+ * rendered DOM keep their flight scripts either way). The search
+ * route rides the very same chain: its page is a grid page, its
+ * cursor is the same marker, and a route the site serves in the
+ * section grammar instead (or with nothing at all) simply never
+ * states a cursor and stays the honest single page.
  *
  * Two guards keep the chain honest: a server that ignores the
  * cursor re-serves the identical listing — the same `next` marker
@@ -83,8 +92,10 @@ import kotlin.random.Random
  * instance (the host may pool or recreate plugins) re-derives the
  * chain from page 1 — the host's page walks are sequential by
  * design (`nextPage`-driven), so the chain is always warm before
- * it is read. Search stays single-page: its mixed-content sections
- * carry no cursor anywhere in the captured grammar.
+ * it is read. A search route the site answers with nothing falls
+ * back to its mixed search page — one more request, its own
+ * `WALLPAPER` section, the honest answer when the grid page serves
+ * nothing.
  *
  * ## Images — taken verbatim, never derived
  *
@@ -145,7 +156,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "Zedge",
-            versionName = "1.2.0",
+            versionName = "1.3.0",
             author = "Cloudimage",
             description =
                 "Free HD phone wallpapers from zedge.net - the flat directory of single " +
@@ -197,16 +208,19 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         }
 
     /**
-     * The site's own search, scoped to its wallpapers section: one
-     * request, the items of its `WALLPAPER` section — ringtones,
-     * notification sounds, live wallpapers and artist profiles the
-     * site may also answer are never served as wallpapers, and an
-     * audio-only answer parses to the honest zero. A blank query
-     * (the contract's escape hatch) lands on the popular landing's
-     * first page, the same default the blank popular feed shows.
-     * Single page, the honest answer: the sections of the captured
-     * grammar carry no continuation cursor anywhere, so a deeper
-     * search page is the honest empty without a request.
+     * The site's own search, on its wallpapers-only route
+     * ([searchPath] — the page the site's own "Wallpapers · View all"
+     * link opens): a full grid of the query's wallpapers, the same
+     * listing grammar as the landing, ridden through the same guarded
+     * cursor chain — deeper pages walk the marker the previous page
+     * handed over, and a grammar that states no marker is the honest
+     * single page. A route the site answers with nothing falls back to
+     * the mixed search page once, scoped to its `WALLPAPER` section,
+     * so ringtones, notification sounds, live wallpapers and artist
+     * profiles never leak in and an audio-only answer parses to the
+     * honest zero either way. A blank query (the contract's escape
+     * hatch) lands on the popular landing's first page, the same
+     * default the blank popular feed shows.
      */
     override suspend fun search(
         query: String,
@@ -217,9 +231,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
             if (query.isBlank()) {
                 return@runCatching listingPage(LANDING_PATH, 1)
             }
-            if (page != 1) return@runCatching Page(emptyList(), nextPage = null)
-            val html = fetchPage("$BASE_URL/find/${encode(query)}")
-            Page(ZedgeParser.parseSearch(html).map(::gridWallpaper), nextPage = null)
+            listingPage(searchPath(query), page, mixedFallback = query)
         }
 
     /**
@@ -321,10 +333,18 @@ class ZedgeWallpaperProvider : WallpaperProvider {
     /**
      * One listing page of the cursor chain. Page 1 is the bare route:
      * its response states the tiles AND the cursor that continues the
-     * grid. A deeper page asks the server for the cursor the previous
-     * page handed over, as search params on the same route — the
-     * continuation the site's own "Load more" rides, expressed in the
-     * one grammar a GET can address.
+     * grid, whichever grammar it speaks — the listing grammar, or the
+     * search sections when that is the page's answer (both parse to
+     * the same tiles-plus-cursor shape). A deeper page asks the server
+     * for the cursor the previous page handed over, as search params
+     * on the same route — the continuation the site's own "Load
+     * more" rides, expressed in the one grammar a GET can address.
+     *
+     * [mixedFallback] — search routes only — covers the page the grid
+     * serves nothing on: the mixed search page is asked once, and its
+     * own `WALLPAPER` section serves when it carries any. It states no
+     * cursor anywhere, so the fallback answer is single-page by
+     * construction, never a fake continuation.
      *
      * Two guards keep the walk honest (the class documentation tells
      * the full story): a server that ignores the cursor re-serves the
@@ -339,11 +359,16 @@ class ZedgeWallpaperProvider : WallpaperProvider {
     private suspend fun listingPage(
         path: String,
         page: Int,
+        mixedFallback: String? = null,
     ): Page {
         if (page < 1) return Page(emptyList(), nextPage = null)
 
         if (page == 1) {
-            val listing = ZedgeParser.parseListing(fetchPage("$BASE_URL$path"))
+            var listing = ZedgeParser.parseListingOrSearch(fetchPage("$BASE_URL$path"))
+            if (listing.items.isEmpty() && mixedFallback != null) {
+                val mixed = ZedgeParser.parseSearch(fetchPage("$BASE_URL/find/${encode(mixedFallback)}"))
+                if (mixed.isNotEmpty()) listing = ZedgeParser.ListingPage(mixed, null)
+            }
             return synchronized(lock) {
                 val state = listingStateOf(path)
                 state.cursors.clear()
@@ -357,7 +382,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         val cursor =
             synchronized(lock) { listingStateOf(path).cursors.getOrNull(page - 2) }
                 ?: return Page(emptyList(), nextPage = null)
-        val listing = ZedgeParser.parseListing(fetchPage(continuationUrl(path, cursor, page)))
+        val listing = ZedgeParser.parseListingOrSearch(fetchPage(continuationUrl(path, cursor, page)))
         if (listing.nextCursor == cursor) return Page(emptyList(), nextPage = null)
         return synchronized(lock) {
             val state = listingStateOf(path)
@@ -469,6 +494,14 @@ class ZedgeWallpaperProvider : WallpaperProvider {
 
     /** The wallpaper page of an id — the UUID route, encoded honestly. */
     private fun wallpaperUrlOf(id: String): String = "$BASE_URL/wallpaper/${encode(id)}"
+
+    /**
+     * The wallpapers-only search route of a query — the site's own
+     * "Wallpapers · View all" page for it: a full grid of the query's
+     * wallpapers in the same listing grammar as the landing (verified
+     * live: 24 tiles plus the continuation cursor).
+     */
+    private fun searchPath(query: String): String = "/find/wallpapers/${encode(query)}"
 
     /** GETs a page, mapping non-2xx answers to source failures. */
     private suspend fun fetchPage(url: String): String {

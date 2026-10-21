@@ -33,6 +33,12 @@ import kotlinx.serialization.json.JsonPrimitive
  *   `NOTIFICATION_SOUND`, `PROFILE`…), each with its own items; only the
  *   `WALLPAPER` section serves, so audio and live-wallpaper products
  *   never leak into a wallpaper feed;
+ * - the wallpapers-only search route (`/find/wallpapers/{query}` — the
+ *   page the site's own "Wallpapers · View all" link opens) speaks the
+ *   LISTING grammar: the same `initialData.pages[].items[]` records and
+ *   the same `pages[].next` keyset cursor the landing and the category
+ *   pages carry (verified live: a full 24-tile grid plus its cursor),
+ *   which is why the provider rides it through its cursor chain;
  * - wallpaper pages (`/wallpaper/{uuid}`) speak an `initialData` record
  *   carrying the definitive content — the `h1`-grade `title`, the
  *   `description`, the site's own `tags` row, the artist `profile`, the
@@ -61,12 +67,15 @@ import kotlinx.serialization.json.JsonPrimitive
  * the honest empty too. [ZedgeParser] only reads what the stream
  * states; the continuation logic and its guards live in the provider.
  *
- * ## Search stays single-page (the honest answer)
+ * ## The search's own route (the section fallback)
  *
- * The mixed-content `searchInitialData` sections carry NO cursor
- * anywhere in the captured grammar — no `next` marker on any section —
- * so search parses one page and the provider reports `nextPage = null`
- * for it, the same honesty as before.
+ * A wallpapers-only search page is a grid page first — but any zedge
+ * page that answers with the section grammar instead still serves
+ * through [parseSearchPage]: its `WALLPAPER` sections' items, and the
+ * continuation cursor the section states in its own `next` field when
+ * it states one (the captured mixed-page sections state none — that
+ * absence is pinned by the fixture tests — so a section page without
+ * one is single-page, the same honest answer as before).
  *
  * ## Honesty rules
  *
@@ -221,6 +230,22 @@ internal object ZedgeParser {
     }
 
     /**
+     * One listing page whole, whichever grammar it speaks: the grid
+     * grammar first ([parseListing] — the landing, the categories, the
+     * wallpapers-only search route), the section grammar as the fallback
+     * ([parseSearchPage] — a page the site answers with its
+     * `searchInitialData` sections instead). Both grammars carry the
+     * same shape — the tiles in the site's order and the cursor that
+     * continues them, null when none is stated — so the provider's one
+     * cursor chain rides every route it addresses.
+     */
+    fun parseListingOrSearch(html: String): ListingPage {
+        val listing = parseListing(html)
+        if (listing.items.isNotEmpty()) return listing
+        return parseSearchPage(html)
+    }
+
+    /**
      * The wallpaper items of a search page, scoped to the site's own
      * `WALLPAPER` section: the mixed-content `searchInitialData` array
      * also carries dynamic wallpapers, ringtones, notification sounds
@@ -228,18 +253,38 @@ internal object ZedgeParser {
      * wallpaper. A search the site answers with audio only parses to
      * the honest zero; a page with no sections at all parses the same.
      */
-    fun parseSearch(html: String): List<GridItem> {
-        val flight = flightOf(html)
-        return valuesOf(flight, "searchInitialData")
+    fun parseSearch(html: String): List<GridItem> = parseSearchPage(html).items
+
+    // ------------------------------------------------------------- search
+
+    /**
+     * A search-shaped page read as a listing page: the items of its
+     * `WALLPAPER` sections, and the continuation cursor the section
+     * grammar states — the `next` marker a section carries when it
+     * continues — null when it states none. The captured mixed-search
+     * sections state no `next` anywhere (pinned by the fixture tests);
+     * a grammar that states one hands it to the provider's cursor chain
+     * the same way the grid pages' `pages[].next` does.
+     */
+    fun parseSearchPage(html: String): ListingPage {
+        val sections = searchSections(html)
+        val items =
+            sections
+                .flatMap { section ->
+                    (section["items"] as? JsonArray)
+                        ?.mapNotNull { item -> itemOf(item) }
+                        ?: emptyList()
+                }.distinctBy { it.id }
+        val nextCursor = sections.firstNotNullOfOrNull { it.stringOf("next") }
+        return ListingPage(items, nextCursor)
+    }
+
+    /** The `WALLPAPER`-typed sections of a search-shaped page, empty when there are none. */
+    private fun searchSections(html: String): List<JsonObject> =
+        valuesOf(flightOf(html), "searchInitialData")
             .mapNotNull { it as? JsonArray }
             .flatMap { sections -> sections.mapNotNull { it as? JsonObject } }
             .filter { section -> section.stringOf("type") == WALLPAPER_TYPE }
-            .flatMap { section ->
-                (section["items"] as? JsonArray)
-                    ?.mapNotNull { item -> itemOf(item) }
-                    ?: emptyList()
-            }.distinctBy { it.id }
-    }
 
     // ------------------------------------------------------------- detail
 
