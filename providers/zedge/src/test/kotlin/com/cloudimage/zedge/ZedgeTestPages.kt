@@ -101,6 +101,21 @@ internal object ZedgeTestPages {
     val emptyShelf: String =
         """<html><head><title>Zedge</title></head><body><script>self.__next_f.push([1,"[\"${'$'}\",\"${'$'}L4a\",null,{\"params\":{\"itemType\":\"WALLPAPER\",\"categories\":[],\"colors\":[],\"sort\":\"RELEVANT\",\"keywords\":[],\"maxPrice\":null,\"minPrice\":null,\"minDurationMs\":null,\"maxDurationMs\":null,\"size\":\"${'$'}undefined\",\"profileType\":\"ANY\"},\"initialData\":{\"pages\":[{\"items\":[],\"next\":null}],\"pageParams\":[\"${'$'}undefined\"]},\"keyword\":\"${'$'}undefined\"}]]"])</script></body></html>"""
 
+    /**
+     * The CLIENT-HYDRATED WALLPAPERS-ONLY SEARCH PAGE — the live route's
+     * observed shape for the queries the site fills browser-side
+     * (probe-verified 2026-10-21, 'indian women': HTTP 200, the flight
+     * envelope and `initialData.pages` structure of the captured search
+     * fixtures, ZERO items and NO cursor): the grid its own UI builds
+     * through the Load-more lane. The keywords are the route's own
+     * (`["indian women"]`), the envelope is the captured grammar — the
+     * emptiness is the point: this fixture must parse to the honest
+     * empty and hand page 1 to the lane, never serve the mixed
+     * fallback's shallow section as the query's whole answer.
+     */
+    val searchWallpapersClientHydrated: String =
+        """<html><head><title>indian women wallpapers and backgrounds</title></head><body><script>self.__next_f.push([1,"[\"${'$'}\",\"${'$'}L4a\",null,{\"params\":{\"itemType\":\"WALLPAPER\",\"keywords\":[\"indian women\"],\"categories\":[],\"colors\":[],\"sort\":\"RELEVANT\",\"maxPrice\":null,\"minPrice\":null,\"minDurationMs\":null,\"maxDurationMs\":null,\"size\":\"${'$'}undefined\",\"profileType\":\"ANY\"},\"initialData\":{\"pages\":[{\"items\":[],\"next\":null}],\"pageParams\":[\"${'$'}undefined\"]},\"keyword\":\"${'$'}undefined\"}]]"])</script></body></html>"""
+
     val plainHtml: String =
         """<html><head><title>Zedge</title></head><body><h1>Download HD Phone Wallpapers for Free</h1><a href="https://www.zedge.net/wallpapers">Wallpapers</a><script>console.log("no flight here")</script></body></html>"""
 
@@ -139,6 +154,20 @@ internal object ZedgeTestPages {
 
     val graphqlLastPage: String =
         """{"data":{"browse_filteredList":{"items":[{"id":"e5f6a7b8-c9d0-4e1f-2a3b-4c5d6e7f8a9b","licensed":false,"title":"Amber Drift","type":"WALLPAPER","origin":null,"paymentMethod":{"type":"NONE","price":null},"meta":{"previewUrl":"https://is.zobj.net/image-server/v1/images?r=gE2pre_9QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","thumbUrl":"https://is.zobj.net/image-server/v1/images?r=gE2sig_1QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9"},"profile":{"id":"5e6f7a8b-9c0d-4e1f-2a3b-4c5d6e7f8a9c","name":"Duskfield","avatarIconUrl":"https://is.zobj.net/image-server/v1/images?r=gE2ava_8QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","verified":false}},{"id":"f6a7b8c9-d0e1-4f2a-3b4c-5d6e7f8a9b0c","licensed":false,"title":"Quiet Lagoon","type":"WALLPAPER","origin":null,"paymentMethod":{"type":"NONE","price":null},"meta":{"previewUrl":"https://is.zobj.net/image-server/v1/images?r=gF2pre_4QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","thumbUrl":"https://is.zobj.net/image-server/v1/images?r=gF2sig_7QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9"},"profile":{"id":"6f7a8b9c-0d1e-4f2a-3b4c-5d6e7f8a9b0d","name":"Stillwater Co.","avatarIconUrl":"https://is.zobj.net/image-server/v1/images?r=gF2ava_5QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","verified":false}}],"next":null}}}"""
+
+    /**
+     * A SYNTHESIZED PAGE-1 ANSWER from the Load-more lane — the request
+     * without a cursor (`input` carrying no `next`) that the site's own
+     * browser issues when a route's grid hydrates client-side
+     * (probe-verified live 2026-10-21: the 'indian women' query's true
+     * first batch — 24 tiles in the same item grammar plus its own
+     * `next` continuation, trimmed here to three). The item records, the
+     * answer envelope and the base64 keyset cursor encoding are the
+     * captured grammar; the records and the marker are fresh (the
+     * marker's payload machine-derived, not hand-typed).
+     */
+    val graphqlFirstPage: String =
+        """{"data":{"browse_filteredList":{"items":[{"id":"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d","licensed":false,"title":"Rani Scroll","type":"WALLPAPER","origin":null,"paymentMethod":{"type":"NONE","price":null},"meta":{"previewUrl":"https://is.zobj.net/image-server/v1/images?r=gH1pre_2QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","microThumb":"UklGRp4AAABXRUJQVlA4IJIAAADwAwCdASoMABQAPp0+mUgloyKhMAgAsBOJZwAD4kHp/nEHXLHR67BgAP7zK584mu3O1MAMZcD7tZCPsVAUvr3gRswQudLI/hJ7ge+U0i2aaSilNV+wmHzvT4xcgoog9ExXl2aWVCRaF8BJWXuxNseghGrPu06t7zPAZbXfgUyY/VHpbA7HcUUuDeDzYkw+lMAAAA==","thumbUrl":"https://is.zobj.net/image-server/v1/images?r=gH1sig_3QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9"},"profile":{"id":"7a8b9c0d-1e2f-4a3b-8c4d-9e0f1a2b3c4e","name":"Studio Kesar","avatarIconUrl":"https://is.zobj.net/image-server/v1/images?r=gH1ava_4QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","verified":false}},{"id":"1b2c3d4e-5f6a-4b7c-9d8e-0f1a2b3c4d5e","licensed":false,"title":"Silk Road Portrait","type":"WALLPAPER","origin":null,"paymentMethod":{"type":"NONE","price":null},"meta":{"previewUrl":"https://is.zobj.net/image-server/v1/images?r=gH2pre_6QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","thumbUrl":"https://is.zobj.net/image-server/v1/images?r=gH2sig_1QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9"},"profile":{"id":"8b9c0d1e-2f3a-4b3c-9d4e-0f1a2b3c4d5f","name":"Marigold Press","avatarIconUrl":"https://is.zobj.net/image-server/v1/images?r=gH2ava_2QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","verified":false}},{"id":"2c3d4e5f-6a7b-4c8d-0e9f-1a2b3c4d5e6f","licensed":false,"title":"Monsoon Breeze","type":"WALLPAPER","origin":null,"paymentMethod":{"type":"NONE","price":null},"meta":{"previewUrl":"https://is.zobj.net/image-server/v1/images?r=gH3pre_8QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","thumbUrl":"https://is.zobj.net/image-server/v1/images?r=gH3sig_5QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9"},"profile":{"id":"9c0d1e2f-3a4b-4c3d-9e5f-0a1b2c3c4e6f","name":"Peacock Loom","avatarIconUrl":"https://is.zobj.net/image-server/v1/images?r=gH3ava_7QmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmQmx9","verified":false}}],"next":"X3Njb3JlPTE1LjMwNzY5NXxmaXJzdFB1Ymxpc2hlZEF0PTE3OTI1NDcwMDAwMDB8aWQ9YTFiMmMzZDQtZTVmNi00YTdiLThjOWQtMGUxZjJhM2I0YzVkfF9wcmVmZXJlbmNlPTUwMDI0YWUxLWE3YzMtNGU3Yy04YmY4LTczNDc4NWFiNDVlZQ=="}}}"""
 
     val graphqlError: String =
         """{"errors":[{"message":"bad request","path":["browse_filteredList"]}],"data":null}"""

@@ -70,7 +70,8 @@ import kotlin.random.Random
  * WebView lane's rendered DOM both keep their script contents).
  *
  * ## Cursor-chain pagination (v1.2.0, search since v1.3.0, the site's
- * own Load-more lane since v1.4.0)
+ * own Load-more lane since v1.4.0, the client-hydrated page 1 since
+ * v1.5.0)
  *
  * The grids' "Load more" is a cursor walk: every listing response
  * states, in its own flight stream, the base64 keyset cursor that
@@ -121,6 +122,23 @@ import kotlin.random.Random
  * past the stall). The bridge never fabricates — the dup guard has
  * the last word, so a bridged answer of recycled tiles ends the walk
  * as honestly as before.
+ *
+ * THE CLIENT-HYDRATED PAGE 1 (v1.5.0, probe-verified live): some
+ * queries' wallpapers-only grids fill browser-side only — the observed
+ * live case ('indian women') ships a page-1 stream of ZERO items and
+ * no cursor while the site's own UI serves the query's full grid
+ * through the Load-more lane (probe: 24 tiles plus its own `next`,
+ * then page after page of fresh tiles, 192 unique over eight pages;
+ * the pre-fix behavior was the mixed page's 15-tile shallow section
+ * with no cursor — the "only a few results" the app used to show). So
+ * an EMPTY SSR grid on a keyword-bearing route asks that same lane
+ * for page 1 the way the site's own browser does: the keywords alone,
+ * no cursor. The landing never asks — empty keywords answer the
+ * popular feed, which is not this route's answer to give — and the
+ * lane's page-1 cursor is its OWN context's boundary, so deeper pages
+ * walk it natively, no bridge involved. A refused POST, an unparseable
+ * or empty answer, or a host predating the POST facade degrades to the
+ * mixed-page fallback untouched.
  *
  * The guard that keeps the chain honest: a page whose items are ALL
  * dups of what already served is the honest empty, even when its
@@ -197,7 +215,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
         ProviderMeta(
             id = ID,
             name = "Zedge",
-            versionName = "1.4.0",
+            versionName = "1.5.0",
             author = "Cloudimage",
             description =
                 "Free HD phone wallpapers from zedge.net - the flat directory of single " +
@@ -255,13 +273,18 @@ class ZedgeWallpaperProvider : WallpaperProvider {
      * listing grammar as the landing, ridden through the same guarded
      * cursor chain — deeper pages walk the marker the previous page
      * handed over, and a grammar that states no marker is the honest
-     * single page. A route the site answers with nothing falls back to
-     * the mixed search page once, scoped to its `WALLPAPER` section,
-     * so ringtones, notification sounds, live wallpapers and artist
-     * profiles never leak in and an audio-only answer parses to the
-     * honest zero either way. A blank query (the contract's escape
-     * hatch) lands on the popular landing's first page, the same
-     * default the blank popular feed shows.
+     * single page. A page the site fills browser-side only — an empty
+     * SSR grid on a keyword-bearing route — asks the site's own
+     * Load-more lane for page 1 first, the keywords alone, the request
+     * its own browser issues (probe-verified live: the 'indian women'
+     * query's full grid, 24 tiles plus its own continuation). A route
+     * the site answers with nothing falls back to the mixed search
+     * page once, scoped to its `WALLPAPER` section, so ringtones,
+     * notification sounds, live wallpapers and artist profiles never
+     * leak in and an audio-only answer parses to the honest zero either
+     * way. A blank query (the contract's escape hatch) lands on the
+     * popular landing's first page, the same default the blank popular
+     * feed shows.
      */
     override suspend fun search(
         query: String,
@@ -440,6 +463,21 @@ class ZedgeWallpaperProvider : WallpaperProvider {
 
         if (page == 1) {
             var listing = ZedgeParser.parseListingOrSearch(fetchPage("$BASE_URL$path"))
+            // The client-hydrated page 1: an empty SSR grid on a
+            // keyword-bearing route asks the Load-more lane for its own
+            // first batch — the keywords alone, no cursor, the request the
+            // site's own browser issues (probe-verified live). The landing
+            // never asks — empty keywords answer the popular feed — and
+            // the lane's page-1 cursor is its OWN context's boundary, so
+            // the chain below walks it natively, no bridge involved. A
+            // refused, unparseable or empty lane answer degrades to the
+            // mixed fallback untouched.
+            if (listing.items.isEmpty() && keywords.isNotEmpty()) {
+                val posted =
+                    runCatching { ZedgeParser.parseGraphqlListing(postFirstPage(keywords)) }
+                        .getOrNull()
+                if (posted != null && posted.items.isNotEmpty()) listing = posted
+            }
             if (listing.items.isEmpty() && mixedFallback != null) {
                 val mixed = ZedgeParser.parseSearch(fetchPage("$BASE_URL/find/${encode(mixedFallback)}"))
                 if (mixed.isNotEmpty()) listing = ZedgeParser.ListingPage(mixed, null)
@@ -628,6 +666,26 @@ class ZedgeWallpaperProvider : WallpaperProvider {
     private suspend fun postListing(
         keywords: List<String>,
         cursor: String,
+    ): String = postGraphqlListing(keywords, cursor)
+
+    /**
+     * The same lane's page 1 — the request the site's own browser issues
+     * when a route's grid hydrates client-side: the POST without a
+     * cursor, the keywords alone (probe-verified live from a clean
+     * network: the 'indian women' wallpapers-only route serves its grid
+     * browser-side only — the SSR stream carries zero items and no
+     * cursor — and this request answers the query's true first batch,
+     * 24 tiles in the same item grammar plus its own `next`
+     * continuation, which the chain then walks natively, every later
+     * page fresh). Non-2xx answers throw — the caller's guard degrades
+     * to the mixed page, so a refused POST is never a page's dead end.
+     */
+    private suspend fun postFirstPage(keywords: List<String>): String = postGraphqlListing(keywords, cursor = null)
+
+    /** One POST to the lane — [cursor] null addresses page 1, a marker rides `input.next` for every deeper page. */
+    private suspend fun postGraphqlListing(
+        keywords: List<String>,
+        cursor: String?,
     ): String {
         val client = httpClient ?: error("provider used before configure()")
         val body =
@@ -647,7 +705,7 @@ class ZedgeWallpaperProvider : WallpaperProvider {
                                 put("profileType", "ANY")
                                 put("sort", "RELEVANT")
                                 put("size", 24)
-                                put("next", cursor)
+                                cursor?.let { put("next", it) }
                             },
                         )
                     },

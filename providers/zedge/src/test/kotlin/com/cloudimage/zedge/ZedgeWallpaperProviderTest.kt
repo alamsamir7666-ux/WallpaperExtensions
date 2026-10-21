@@ -124,6 +124,8 @@ class ZedgeWallpaperProviderTest {
     private val findNatureUrl = "https://www.zedge.net/find/nature"
     private val findWallpapersRingtonsUrl = "https://www.zedge.net/find/wallpapers/ringtons%20free"
     private val findRingtonsUrl = "https://www.zedge.net/find/ringtons%20free"
+    private val findWallpapersIndianWomenUrl = "https://www.zedge.net/find/wallpapers/indian%20women"
+    private val findIndianWomenUrl = "https://www.zedge.net/find/indian%20women"
 
     /** The cursor continuations the provider builds for the captured walks. */
     private val page2Url =
@@ -542,6 +544,162 @@ class ZedgeWallpaperProviderTest {
             assertEquals("the mixed fallback states no cursor anywhere", null, page.nextPage)
         }
 
+    // ---------------------------------------------- client-hydrated page 1
+
+    @Test
+    fun aClientHydratedSearchPageServesPageOneThroughTheSitesOwnLane() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(findWallpapersIndianWomenUrl to ok(ZedgeTestPages.searchWallpapersClientHydrated)),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlFirstPage)),
+                )
+
+            val page = provider.search("indian women", page = 1).getOrThrow()
+
+            assertEquals(
+                "the empty grid is asked, then the lane serves its page 1 — the mixed page is never consulted",
+                listOf(findWallpapersIndianWomenUrl),
+                client.requests,
+            )
+            assertEquals(3, page.wallpapers.size)
+            assertEquals("Rani Scroll", page.wallpapers.first().title)
+            assertEquals("the lane's own continuation states the next page", 2, page.nextPage)
+        }
+
+    @Test
+    fun theLanesPageOneRequestCarriesTheKeywordsAndNoCursor() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(findWallpapersIndianWomenUrl to ok(ZedgeTestPages.searchWallpapersClientHydrated)),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlFirstPage)),
+                )
+
+            provider.search("indian women", page = 1).getOrThrow()
+
+            val body = client.postBodies.single()
+            assertEquals(listOf("indian women"), postKeywordsOf(body))
+            assertTrue(
+                "page 1 addresses the lane without a cursor",
+                "next" !in postInputOf(body),
+            )
+        }
+
+    @Test
+    fun theLaneServedPageOneWalksItsOwnCursorNatively() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(findWallpapersIndianWomenUrl to ok(ZedgeTestPages.searchWallpapersClientHydrated)),
+                    postAnswers =
+                        listOf(
+                            ok(ZedgeTestPages.graphqlFirstPage),
+                            ok(ZedgeTestPages.graphqlContinuation),
+                        ),
+                )
+
+            provider.search("indian women", page = 1).getOrThrow()
+            val second = provider.search("indian women", page = 2).getOrThrow()
+
+            assertEquals(3, second.wallpapers.size)
+            assertEquals("Ashen Meadow", second.wallpapers.first().title)
+            assertEquals("an advancing lane page states the next one", 3, second.nextPage)
+            assertEquals(
+                "no GET continuation re-asks what the lane owns",
+                listOf(findWallpapersIndianWomenUrl),
+                client.requests,
+            )
+            assertEquals(2, client.postBodies.size)
+            assertEquals(
+                "page 2 rides the lane's own page-1 cursor — its context's boundary, no bridge",
+                ZedgeParser.parseGraphqlListing(ZedgeTestPages.graphqlFirstPage).nextCursor,
+                postInputStringOf(client.postBodies[1], "next"),
+            )
+        }
+
+    @Test
+    fun aRefusedLaneDegradesToTheMixedPage() =
+        runTest {
+            // No scripted answers: the FakeClient refuses every POST with
+            // 500 — a host predating the POST facade, or a refused exchange.
+            val client =
+                configureWith(
+                    mapOf(
+                        findWallpapersIndianWomenUrl to ok(ZedgeTestPages.searchWallpapersClientHydrated),
+                        findIndianWomenUrl to ok(ZedgeTestPages.search),
+                    ),
+                )
+
+            val page = provider.search("indian women", page = 1).getOrThrow()
+
+            assertEquals(
+                "the empty grid, one refused lane ask, then the mixed page once",
+                listOf(findWallpapersIndianWomenUrl, findIndianWomenUrl),
+                client.requests,
+            )
+            assertEquals(3, page.wallpapers.size)
+            assertNull("the mixed fallback states no cursor anywhere", page.nextPage)
+        }
+
+    @Test
+    fun anEmptyLaneAnswerDegradesToTheMixedPage() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(
+                        findWallpapersIndianWomenUrl to ok(ZedgeTestPages.searchWallpapersClientHydrated),
+                        findIndianWomenUrl to ok(ZedgeTestPages.search),
+                    ),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlError)),
+                )
+
+            val page = provider.search("indian women", page = 1).getOrThrow()
+
+            assertEquals(
+                listOf(findWallpapersIndianWomenUrl, findIndianWomenUrl),
+                client.requests,
+            )
+            assertEquals(3, page.wallpapers.size)
+            assertNull(page.nextPage)
+        }
+
+    @Test
+    fun theLandingNeverAsksTheLaneForPageOne() =
+        runTest {
+            // Keywords are load-bearing: empty keywords answer the popular
+            // feed, so an empty landing grid may not borrow the lane.
+            val client =
+                configureWith(mapOf(landingUrl to ok(ZedgeTestPages.emptyShelf)))
+
+            val page = provider.popular(page = 1).getOrThrow()
+
+            assertTrue(page.wallpapers.isEmpty())
+            assertNull(page.nextPage)
+            assertTrue("the landing never posts", client.postBodies.isEmpty())
+            assertEquals(listOf(landingUrl), client.requests)
+        }
+
+    @Test
+    fun aClientHydratedCategoryPageServesPageOneThroughTheLane() =
+        runTest {
+            val client =
+                configureWith(
+                    mapOf(animeUrl to ok(ZedgeTestPages.emptyShelf)),
+                    postAnswers = listOf(ok(ZedgeTestPages.graphqlFirstPage)),
+                )
+
+            val page = provider.popular(page = 1, filters = Filters.of("category" to "anime")).getOrThrow()
+
+            assertEquals(3, page.wallpapers.size)
+            assertEquals(2, page.nextPage)
+            assertEquals(
+                "the category lane ask carries the slug capitalized the site's own page sends",
+                listOf("Anime"),
+                postKeywordsOf(client.postBodies.single()),
+            )
+        }
+
     @Test
     fun anAudioOnlyQueryParsesToTheHonestZeroBothWays() =
         runTest {
@@ -698,7 +856,7 @@ class ZedgeWallpaperProviderTest {
     fun theMetaStatesTheFlatDoctrine() {
         assertEquals("cloudimage.zedge", provider.meta.id)
         assertEquals("Zedge", provider.meta.name)
-        assertEquals("1.4.0", provider.meta.versionName)
+        assertEquals("1.5.0", provider.meta.versionName)
         assertEquals(
             setOf(Capability.POPULAR, Capability.SEARCH, Capability.TAGS, Capability.FILTERS),
             provider.capabilities,
